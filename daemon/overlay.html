@@ -3290,7 +3290,8 @@
          <option value="3">ทีมงาน (Staff)</option>
        </select></div>
        <div class="field" id="brainField"><label>⚙ RUNTIME + 🧠 สมอง (โมเดล/ผู้ให้บริการ)</label>
-         <select id="eRuntime"></select>
+         <select id="eRuntime" style="display:none"></select>
+         <div class="checks" id="eRuntimeChoices"></div>
          <div id="eRuntimeHint" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
          <div style="font-size:10.5px;color:var(--dim);margin:6px 0 4px">Brain/provider settings below apply to Claude runtime only; Codex uses its own CLI config.</div>
          <div id="brainModelBlock">
@@ -3443,6 +3444,7 @@
       roleSel.value = a.role;
       modalCard.querySelector("#eTier").value = String(a.tier || (id === "main" ? 2 : 3));
       const runtimeSel = modalCard.querySelector("#eRuntime");
+      const runtimeChoices = modalCard.querySelector("#eRuntimeChoices");
       const runtimeHint = modalCard.querySelector("#eRuntimeHint");
       const brainField = modalCard.querySelector("#brainField");
       const brainModelBlock = modalCard.querySelector("#brainModelBlock");
@@ -3460,9 +3462,32 @@
         runtimeSel.value = cur;
         runtimeInitialized = true;
       };
+      const renderRuntimeChoices = () => {
+        if (!runtimeChoices || !runtimeSel) return;
+        const inherited = inheritedRuntime();
+        const items = [["", `Inherit (${runtimeName(inherited)})`]]
+          .concat(RUNTIMES.map((r) => [r, runtimeName(r)]));
+        runtimeChoices.innerHTML = "";
+        for (const [value, label] of items) {
+          const c = document.createElement("div");
+          c.className = "chk" + ((normRuntime(runtimeSel.value) || "") === value ? " on" : "");
+          c.textContent = label;
+          c.onclick = () => {
+            runtimeSel.value = value;
+            renderRuntimeChoices();
+            syncRuntimeUI();
+            refreshBrainForRuntime();
+          };
+          runtimeChoices.appendChild(c);
+        }
+      };
       const syncRuntimeUI = () => {
         if (!runtimeSel) return;
         const rt = effectiveRuntimeInEditor();
+        if (runtimeChoices) runtimeChoices.querySelectorAll(".chk").forEach((x, i) => {
+          const value = i === 0 ? "" : normRuntime(RUNTIMES[i - 1]);
+          x.classList.toggle("on", (normRuntime(runtimeSel.value) || "") === value);
+        });
         if (runtimeHint) runtimeHint.textContent = runtimeSel.value
           ? `Override: ${runtimeName(rt)}`
           : `Inherited from ${normRuntime(roleProfile(roleSel.value).runtime) ? "role" : "default"}: ${runtimeName(rt)}`;
@@ -3471,9 +3496,10 @@
       };
       if (runtimeSel) {
         renderRuntimeOptions();
-        runtimeSel.onchange = () => { syncRuntimeUI(); refreshBrainForRuntime(); };
+        renderRuntimeChoices();
+        runtimeSel.onchange = () => { renderRuntimeChoices(); syncRuntimeUI(); refreshBrainForRuntime(); };
       }
-      roleSel.onchange = () => { renderRuntimeOptions(); syncRuntimeUI(); refreshBrainForRuntime(); };
+      roleSel.onchange = () => { renderRuntimeOptions(); renderRuntimeChoices(); syncRuntimeUI(); refreshBrainForRuntime(); };
       syncRuntimeUI();
     // 🧠 swappable brain picker (per agent). Provider labels are proper nouns
     // (untranslated); the token row shows for any non-Claude backend.
