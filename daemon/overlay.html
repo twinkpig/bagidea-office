@@ -724,6 +724,9 @@
   .arow .meta b { font-size: 13px; display: block; }
   .arow .meta span { font-size: 11px; color: var(--dim); }
   .arow .meta .brain { font-size: 10.5px; color: rgba(94,200,255,0.85); }
+  .arow .meta .runtime { display: inline-block !important; font-size: 10.5px; color: #9fe7c3; margin-left: 7px; }
+  .arow .meta .runtime.codex { color: #ffd28a; }
+  .arow .meta .runtime.claude { color: #9fe7c3; }
   /* Fixed-height rows: confirm messages swap in-place, never reflow the list */
   .arow .meta b, .arow .meta span {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
@@ -1217,12 +1220,35 @@
   const ROLES = ["Researcher", "Engineer", "Designer", "Analyst", "Operator", "Specialist"];
   const NPCS = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12];
   // Live registry from the daemon (roster.sync) — identity source of truth.
-  let ROSTER = {}, REGROLES = [], REGSKILLS = {}, REGTOOLS = [], AUTOSKILLS = true, VERIFY = false;
+  let ROSTER = {}, REGROLES = [], REGROLEPROFILES = {}, REGSKILLS = {}, REGTOOLS = [], AUTOSKILLS = true, VERIFY = false;
   let BUILTIN_DESC = {}, REGMCP = {}, SOUND = true, HEARTBEAT = 0;
+  let DEFAULT_RUNTIME = "claude", RUNTIMES = ["claude", "codex"];
   let FEATURES = { openai: false, gemini: false, stt: false, tts: false, live: false, image: false };
   let TTSON = true, SOCIALMIN = 60, MAXSTAFF = 18, PROPOSALMIN = 120;
   let PROJECTS_CACHE = [];
   let _plistScroll = 0, _plistQ = "";  // preserve project-list scroll + search across live refreshes
+  function normRuntime(v) {
+    v = String(v || "").trim().toLowerCase();
+    return v === "codex" || v === "claude" ? v : "";
+  }
+  function runtimeName(v) { return normRuntime(v) === "codex" ? "Codex" : "Claude Code"; }
+  function roleProfile(role) {
+    const p = REGROLEPROFILES && REGROLEPROFILES[String(role || "")];
+    return p && typeof p === "object" ? p : {};
+  }
+  function effectiveRuntimeForAgent(id) {
+    const a = ROSTER[id] || {};
+    const ar = normRuntime(a.runtime);
+    if (ar) return { runtime: ar, source: "agent" };
+    const rr = normRuntime(roleProfile(a.role).runtime);
+    if (rr) return { runtime: rr, source: "role" };
+    return { runtime: normRuntime(DEFAULT_RUNTIME) || "claude", source: "default" };
+  }
+  function runtimeBadgeHtml(info) {
+    const r = normRuntime(info && info.runtime) || "claude";
+    const src = (info && info.source) || "default";
+    return `<span class="runtime ${r}" title="runtime: ${runtimeName(r)} · ${src}">⚙ ${runtimeName(r)}</span>`;
+  }
   function npcOf(id) {
     if (ROSTER[id] && ROSTER[id].avatar) return ROSTER[id].avatar;
     if (id === "main") return 7;
@@ -2414,6 +2440,65 @@
     };
   }
 
+  function buildChipPicker(box, items, sel) {
+    if (!box) return;
+    box.style.position = "relative";
+    box.innerHTML = "";
+    const byVal = new Map(items.map((it) => [it.val, it]));
+    const chips = document.createElement("div");
+    chips.className = "checks";
+    const menu = document.createElement("div");
+    menu.className = "cbmenu";
+    const search = document.createElement("input");
+    search.placeholder = "🔍 " + tr("ค้นหา");
+    search.style.cssText = "width:100%;margin:0;border:0;border-bottom:1px solid var(--line);border-radius:9px 9px 0 0;padding:8px 12px;font-size:12px;background:#0e1626;color:var(--text)";
+    const opts = document.createElement("div");
+    menu.append(search, opts);
+    box.append(chips, menu);
+    const addBtn = document.createElement("div");
+    addBtn.className = "chk"; addBtn.style.cssText = "border-style:dashed;cursor:pointer";
+    addBtn.textContent = "＋ " + tr("เพิ่ม");
+    function renderChips() {
+      chips.innerHTML = "";
+      const picked = items.filter((it) => sel.has(it.val));
+      for (const v of sel) if (!byVal.has(v)) picked.push({ val: v, label: v, tip: "" });
+      if (!picked.length) {
+        const e = document.createElement("span");
+        e.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
+        e.textContent = tr("ยังไม่ได้เลือก");
+        chips.appendChild(e);
+      }
+      for (const it of picked) {
+        const c = document.createElement("div");
+        c.className = "chk on"; c.title = it.tip || ""; c.style.cursor = "pointer";
+        c.innerHTML = `${esc(it.label)} <b style="opacity:.6;margin-left:2px">✕</b>`;
+        c.onclick = () => { sel.delete(it.val); renderChips(); if (menu.classList.contains("open")) renderOpts(); };
+        chips.appendChild(c);
+      }
+      chips.appendChild(addBtn);
+    }
+    function renderOpts() {
+      const f = search.value.trim().toLowerCase();
+      const avail = items.filter((it) => !sel.has(it.val) &&
+        (!f || (it.label + " " + (it.tip || "")).toLowerCase().includes(f)));
+      opts.innerHTML = avail.length ? "" : `<div class="cbopt" style="opacity:.55;cursor:default">${tr("ไม่พบ")}</div>`;
+      for (const it of avail) {
+        const o = document.createElement("div");
+        o.className = "cbopt"; o.title = it.tip || ""; o.textContent = it.label;
+        o.onmousedown = (e) => { e.preventDefault(); sel.add(it.val); renderChips(); renderOpts(); search.focus(); };
+        opts.appendChild(o);
+      }
+    }
+    addBtn.onclick = () => {
+      const open = !menu.classList.contains("open");
+      menu.classList.toggle("open", open);
+      if (open) { search.value = ""; renderOpts(); setTimeout(() => search.focus(), 0); }
+    };
+    search.oninput = renderOpts;
+    search.onblur = () => setTimeout(() => menu.classList.remove("open"), 160);
+    renderChips();
+  }
+
   // 🔗 CONNECT: API key vault + external channel connectors.
   async function renderConnectTab() {
     const regAll = await fetch("/registry").then((x) => x.json()).catch(() => ({}));
@@ -2593,6 +2678,23 @@
           else if (act === "rmkey") btn.onclick = () =>
             api("/registry/key", { name: "ANTHROPIC_API_KEY", remove: true }).then(() => renderConnectTab());
         });
+        provbox.appendChild(cc);
+      }
+
+      subhead("Runtime CLIs");
+      const codex = await fetch("/codex/status").then((x) => x.json()).catch((e) => ({ connected: false, error: String(e) }));
+      {
+        const cc = document.createElement("div");
+        cc.className = "arow"; cc.style.cursor = "default";
+        const ok = !!codex.connected;
+        const detail = ok
+          ? `${codex.version || "codex"}${codex.useWsl ? " · WSL" + (codex.distro ? " " + codex.distro : "") : ""}`
+          : (codex.error || "codex command not found");
+        cc.innerHTML = `<div class="meta"><b>${ok ? "✅" : "⚪"} Codex runtime</b>
+            <span class="pstat" style="color:${ok ? "#4ade80" : "var(--dim)"}">${esc(detail)}</span>
+            <span style="font-size:10.5px;color:var(--dim)">ใช้ config/login ของ Codex เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES</span></div>
+          <div class="winbtn" data-a="retest" title="ทดสอบใหม่">🧪</div>`;
+        cc.querySelector(".winbtn").onclick = () => renderConnectTab();
         provbox.appendChild(cc);
       }
 
@@ -2805,7 +2907,10 @@
           ส่วนวงประชุม 🗣 ไม่สร้าง thread · ลบ thread = agent ลืมเรื่องนั้น</div>
         <div id="thlist">loading…</div>`;
     } else {
-      bodyHtml = `<div id="rlist"></div>
+      bodyHtml = `<div class="field"><label>⚙ DEFAULT RUNTIME — role/agent ไม่ได้ตั้งไว้จะใช้ตัวนี้</label>
+          <select id="defaultRuntimeSel">${RUNTIMES.map((r) =>
+            `<option value="${r}">${runtimeName(r)}</option>`).join("")}</select></div>
+        <div id="rlist"></div>
         <div class="assistrow" style="margin-top:8px">
           <input id="newRole" placeholder="New job title…">
           <button class="sparkle" id="addRole">＋ Add</button>
@@ -2831,10 +2936,12 @@
         // The CEO is the user's stand-in, not an AI agent — no model to show.
         let _brainHtml = "";
         if (id !== "ceo") {
+          const _rtInfo = effectiveRuntimeForAgent(id);
           const _prov = a.provider || "claude";
           const _brain = a.model ? a.model : (_prov === "claude" ? "Claude" : _prov);
           const _brainTitle = `${_prov}${a.model ? " / " + a.model : ""}`;
-          _brainHtml = `<span class="brain" title="${_brainTitle}">🧠 ${_brain}</span>`;
+          _brainHtml = (_rtInfo.runtime === "codex" ? "" : `<span class="brain" title="${_brainTitle}">🧠 ${_brain}</span>`) +
+            runtimeBadgeHtml(_rtInfo);
         }
         row.insertAdjacentHTML("beforeend",
           `<div class="meta"><b>${a.name}</b><span>${a.role} · ${id}` +
@@ -3027,13 +3134,27 @@
       });
     } else {
       const list = modalCard.querySelector("#rlist");
+      const defSel = modalCard.querySelector("#defaultRuntimeSel");
+      if (defSel) {
+        defSel.value = normRuntime(DEFAULT_RUNTIME) || "claude";
+        defSel.onchange = () => api("/registry/runtime", { defaultRuntime: defSel.value });
+      }
       for (const r of REGROLES) {
+        const p = roleProfile(r);
+        const rr = normRuntime(p.runtime);
+        const info = rr
+          ? { runtime: rr, source: "role" }
+          : { runtime: normRuntime(DEFAULT_RUNTIME) || "claude", source: "default" };
         const row = document.createElement("div");
         row.className = "arow";
-        row.style.cursor = "default";
-        row.innerHTML = `<div class="meta"><b>${r}</b></div>` +
+        row.innerHTML = `<div class="meta"><b>${esc(r)} ${runtimeBadgeHtml(info)}</b>` +
+          `<span>${p.tier ? "tier " + p.tier + " · " : ""}` +
+          `🎯${(p.skills || []).length} · 🔧${(p.tools || []).length}` +
+          `${p.personaSeed ? " · persona seed" : ""}</span></div>` +
           `<div class="winbtn hide" title="Remove role">✕</div>`;
-        row.querySelector(".winbtn").onclick = async () => {
+        row.onclick = () => openRoleEditor(r);
+        row.querySelector(".winbtn").onclick = async (e) => {
+          e.stopPropagation();
           if (!await confirmDanger(`${t("ลบ role")}: ${r}`,
               t("role นี้จะถูกลบออกจากรายการ — agents ที่ตั้ง role นี้ไว้จะยังอยู่ แต่ role จะหายไป"), t("ลบ role"))) return;
           api("/registry/role", { name: r, remove: true }).then(() => openSettings("roles"));
@@ -3045,6 +3166,56 @@
         if (v) api("/registry/role", { name: v }).then(() => openSettings("roles"));
       };
     }
+  }
+
+  function openRoleEditor(name) {
+    modal.classList.add("open");
+    const p = roleProfile(name);
+    const mySkills = new Set(Array.isArray(p.skills) ? p.skills : []);
+    const myTools = new Set(Array.isArray(p.tools) ? p.tools : []);
+    modalCard.innerHTML = hdr("🧩 ROLE TEMPLATE") +
+      `<div class="field"><label>JOB TITLE</label><input id="rName" maxlength="40" readonly></div>
+       <div class="field"><label>⚙ RUNTIME — agents with this role inherit it unless they override</label>
+         <select id="rRuntime">
+           <option value="">Inherit default (${runtimeName(DEFAULT_RUNTIME)})</option>
+           ${RUNTIMES.map((r) => `<option value="${r}">${runtimeName(r)}</option>`).join("")}
+         </select></div>
+       <div class="field"><label>🏢 DEFAULT LEVEL</label><select id="rTier">
+         <option value="">No template</option>
+         <option value="2">หัวหน้าทีม (Lead)</option>
+         <option value="3">ทีมงาน (Staff)</option>
+       </select></div>
+       <div class="field"><label>✨ PERSONA SEED — seed text for future role-based drafting</label>
+         <textarea id="rPersona" style="min-height:82px" placeholder="What agents in this role usually are responsible for, style, constraints..."></textarea></div>
+       <div class="field"><label>🎯 DEFAULT SKILLS</label><div class="checks" id="rSkills"></div></div>
+       <div class="field"><label>🔧 DEFAULT TOOLS</label><div class="checks" id="rTools"></div></div>
+       <div class="btnrow">
+         <button id="rCancel">Cancel</button>
+         <button class="primary" id="rSave">💾 Save</button>
+       </div>`;
+    modalCard.querySelector("#rName").value = name;
+    modalCard.querySelector("#rRuntime").value = normRuntime(p.runtime);
+    modalCard.querySelector("#rTier").value = p.tier ? String(p.tier) : "";
+    modalCard.querySelector("#rPersona").value = p.personaSeed || "";
+    buildChipPicker(modalCard.querySelector("#rSkills"), Object.keys(REGSKILLS).map((sid) =>
+      ({ val: sid, label: REGSKILLS[sid].name, tip: REGSKILLS[sid].description || "" })), mySkills);
+    buildChipPicker(modalCard.querySelector("#rTools"), REGTOOLS.map((t) =>
+      ({ val: t, label: t, tip: BUILTIN_DESC[t] || "" }))
+      .concat(Object.keys(REGMCP).map((n) => ({ val: "mcp:" + n, label: "🔌 " + n, tip: (REGMCP[n] || {}).command || "" }))), myTools);
+    modalCard.querySelector("#rCancel").onclick = () => openSettings("roles");
+    modalCard.querySelector("#rSave").onclick = async () => {
+      await api("/registry/role", {
+        name,
+        profile: {
+          runtime: modalCard.querySelector("#rRuntime").value,
+          tier: modalCard.querySelector("#rTier").value || undefined,
+          personaSeed: modalCard.querySelector("#rPersona").value,
+          skills: [...mySkills],
+          tools: [...myTools],
+        },
+      });
+      openSettings("roles");
+    };
   }
 
   function openSkillEditor(id) {
@@ -3106,7 +3277,11 @@
          <option value="2">หัวหน้าทีม (Lead)</option>
          <option value="3">ทีมงาน (Staff)</option>
        </select></div>
-       <div class="field"><label>🧠 สมอง (โมเดล/ผู้ให้บริการ) — ดีฟอลต์คือ Claude</label>
+       <div class="field"><label>⚙ RUNTIME — ตัว CLI ที่ใช้ทำงานจริง</label>
+         <select id="eRuntime"></select>
+         <div id="eRuntimeHint" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
+       </div>
+       <div class="field" id="brainField"><label>🧠 สมอง (โมเดล/ผู้ให้บริการ) — ใช้กับ Claude runtime เท่านั้น</label>
          <select id="eProvider"></select>
          <div id="eModelWrap" style="position:relative;margin-top:6px">
            <input id="eModel" autocomplete="off" maxlength="60" style="margin:0;width:100%" placeholder="โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)">
@@ -3215,64 +3390,6 @@
     // Skill / tool assignment. The flat "every chip always shown" list got unwieldy as
     // the library grew, so: show ONLY what's picked (as removable chips), plus a "＋ add"
     // button that drops a searchable menu of the rest. Re-rendered when the copilot picks.
-    function buildChipPicker(box, items, sel) {
-      if (!box) return;
-      box.style.position = "relative";
-      box.innerHTML = "";
-      const byVal = new Map(items.map((it) => [it.val, it]));
-      const chips = document.createElement("div");
-      chips.className = "checks";
-      const menu = document.createElement("div");
-      menu.className = "cbmenu";
-      const search = document.createElement("input");
-      search.placeholder = "🔍 " + tr("ค้นหา");
-      search.style.cssText = "width:100%;margin:0;border:0;border-bottom:1px solid var(--line);border-radius:9px 9px 0 0;padding:8px 12px;font-size:12px;background:#0e1626;color:var(--text)";
-      const opts = document.createElement("div");
-      menu.append(search, opts);
-      box.append(chips, menu);
-      const addBtn = document.createElement("div");
-      addBtn.className = "chk"; addBtn.style.cssText = "border-style:dashed;cursor:pointer";
-      addBtn.textContent = "＋ " + tr("เพิ่ม");
-      function renderChips() {
-        chips.innerHTML = "";
-        const picked = items.filter((it) => sel.has(it.val));
-        for (const v of sel) if (!byVal.has(v)) picked.push({ val: v, label: v, tip: "" });
-        if (!picked.length) {
-          const e = document.createElement("span");
-          e.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
-          e.textContent = tr("ยังไม่ได้เลือก");
-          chips.appendChild(e);
-        }
-        for (const it of picked) {
-          const c = document.createElement("div");
-          c.className = "chk on"; c.title = it.tip || ""; c.style.cursor = "pointer";
-          c.innerHTML = `${esc(it.label)} <b style="opacity:.6;margin-left:2px">✕</b>`;
-          c.onclick = () => { sel.delete(it.val); renderChips(); if (menu.classList.contains("open")) renderOpts(); };
-          chips.appendChild(c);
-        }
-        chips.appendChild(addBtn);
-      }
-      function renderOpts() {
-        const f = search.value.trim().toLowerCase();
-        const avail = items.filter((it) => !sel.has(it.val) &&
-          (!f || (it.label + " " + (it.tip || "")).toLowerCase().includes(f)));
-        opts.innerHTML = avail.length ? "" : `<div class="cbopt" style="opacity:.55;cursor:default">${tr("ไม่พบ")}</div>`;
-        for (const it of avail) {
-          const o = document.createElement("div");
-          o.className = "cbopt"; o.title = it.tip || ""; o.textContent = it.label;
-          o.onmousedown = (e) => { e.preventDefault(); sel.add(it.val); renderChips(); renderOpts(); search.focus(); };
-          opts.appendChild(o);
-        }
-      }
-      addBtn.onclick = () => {
-        const open = !menu.classList.contains("open");
-        menu.classList.toggle("open", open);
-        if (open) { search.value = ""; renderOpts(); setTimeout(() => search.focus(), 0); }
-      };
-      search.oninput = renderOpts;
-      search.onblur = () => setTimeout(() => menu.classList.remove("open"), 160);
-      renderChips();
-    }
     const skBox = modalCard.querySelector("#eSkills");
     function renderSkillChips() {
       buildChipPicker(skBox, Object.keys(REGSKILLS).map((sid) =>
@@ -3302,6 +3419,7 @@
       };
       grid.appendChild(c);
     }
+    let runtimeForSave = () => "claude";
     const roleSel = modalCard.querySelector("#eRole");
     if (roleSel) {
       for (const r of (REGROLES.length ? REGROLES : ROLES)) {
@@ -3311,6 +3429,37 @@
       }
       roleSel.value = a.role;
       modalCard.querySelector("#eTier").value = String(a.tier || (id === "main" ? 2 : 3));
+      const runtimeSel = modalCard.querySelector("#eRuntime");
+      const runtimeHint = modalCard.querySelector("#eRuntimeHint");
+      const brainField = modalCard.querySelector("#brainField");
+      let refreshBrainForRuntime = () => {};
+      const inheritedRuntime = () =>
+        normRuntime(roleProfile(roleSel.value).runtime) || normRuntime(DEFAULT_RUNTIME) || "claude";
+      const effectiveRuntimeInEditor = () => normRuntime(runtimeSel && runtimeSel.value) || inheritedRuntime();
+      runtimeForSave = effectiveRuntimeInEditor;
+      let runtimeInitialized = false;
+      const renderRuntimeOptions = () => {
+        if (!runtimeSel) return;
+        const cur = runtimeInitialized ? normRuntime(runtimeSel.value) : normRuntime(a.runtime);
+        runtimeSel.innerHTML = `<option value="">Inherit (${runtimeName(inheritedRuntime())})</option>` +
+          RUNTIMES.map((r) => `<option value="${r}">${runtimeName(r)}</option>`).join("");
+        runtimeSel.value = cur;
+        runtimeInitialized = true;
+      };
+      const syncRuntimeUI = () => {
+        if (!runtimeSel) return;
+        const rt = effectiveRuntimeInEditor();
+        if (runtimeHint) runtimeHint.textContent = runtimeSel.value
+          ? `Override: ${runtimeName(rt)}`
+          : `Inherited from ${normRuntime(roleProfile(roleSel.value).runtime) ? "role" : "default"}: ${runtimeName(rt)}`;
+        if (brainField) brainField.style.display = rt === "codex" ? "none" : "";
+      };
+      if (runtimeSel) {
+        renderRuntimeOptions();
+        runtimeSel.onchange = () => { syncRuntimeUI(); refreshBrainForRuntime(); };
+      }
+      roleSel.onchange = () => { renderRuntimeOptions(); syncRuntimeUI(); refreshBrainForRuntime(); };
+      syncRuntimeUI();
     // 🧠 swappable brain picker (per agent). Provider labels are proper nouns
     // (untranslated); the token row shows for any non-Claude backend.
     const provSel = modalCard.querySelector("#eProvider");
@@ -3394,6 +3543,12 @@
       modelInput.oninput = showMenu;
       modelInput.onblur = () => setTimeout(() => modelMenu.classList.remove("open"), 150);
       const renderModels = (provChanged) => {
+        if (effectiveRuntimeInEditor() === "codex") {
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.title = ""; }
+          warn.style.display = "none";
+          modelWrap.style.display = "none";
+          return;
+        }
         const p = provSel.value;
         const connected = p === "claude" ? true : !!(pcAll[p] && pcAll[p].connected);
         // Can't save an agent onto a provider that isn't connected yet.
@@ -3416,6 +3571,7 @@
         const def = BEST_MODEL[p] || curModels.find(Boolean) || "";
         modelInput.value = (!provChanged && a.model && p === (a.provider || "claude")) ? a.model : def;
       };
+      refreshBrainForRuntime = () => renderModels(false);
       buildProviderOptions();
       provSel.onchange = () => { renderModels(true); refreshModels(provSel.value); };
       renderModels(false);
@@ -3462,8 +3618,13 @@
             prompt: modalCard.querySelector("#ePrompt").value,
             tier: Number(modalCard.querySelector("#eTier").value) || 3,
             voice: (modalCard.querySelector("#eVoice") || {}).value || "",
-            provider: (modalCard.querySelector("#eProvider") || {}).value || "claude",
-            model: (modalCard.querySelector("#eModel") || {}).value || "",
+            runtime: (modalCard.querySelector("#eRuntime") || {}).value || "",
+            provider: runtimeForSave() === "codex"
+              ? (a.provider || "claude")
+              : ((modalCard.querySelector("#eProvider") || {}).value || "claude"),
+            model: runtimeForSave() === "codex"
+              ? (a.model || "")
+              : ((modalCard.querySelector("#eModel") || {}).value || ""),
             persona: {
               expertise: modalCard.querySelector("#eExpertise").value,
               personality: modalCard.querySelector("#ePersonality").value,
@@ -5008,6 +5169,10 @@
     if (ev.type === "roster.sync") {
       ROSTER = ev.agents || {};
       REGROLES = ev.roles || [];
+      REGROLEPROFILES = ev.roleProfiles || {};
+      DEFAULT_RUNTIME = normRuntime(ev.defaultRuntime) || "claude";
+      RUNTIMES = (ev.runtimes || ["claude", "codex"]).map(normRuntime).filter(Boolean);
+      if (!RUNTIMES.length) RUNTIMES = ["claude", "codex"];
       REGSKILLS = ev.skills || {};
       REGTOOLS = ev.tools || [];
       BUILTIN_DESC = ev.builtinTools || {};

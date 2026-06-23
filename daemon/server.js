@@ -4981,6 +4981,21 @@ const server = http.createServer((req, res) => {
       }
     });
 
+  } else if (req.method === "POST" && req.url === "/registry/runtime") {
+    readBody(req, (body) => {
+      try {
+        const rt = runtimeConfig.normalizeRuntime(JSON.parse(body).defaultRuntime) || "claude";
+        reg.defaultRuntime = rt;
+        saveReg();
+        pushRoster();
+        res.writeHead(200);
+        res.end("ok");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
   } else if (req.method === "POST" && req.url === "/registry/role") {
     readBody(req, (body) => {
       try {
