@@ -147,6 +147,8 @@ When you pick a new monitor, the office **restarts itself briefly** to move to i
 ## 6. Next steps
 
 - [Hire more employees + set up personas](agents.md)
+- Use **ROLES** for template defaults and **AGENTS** for per-person runtime overrides;
+  Codex agents use the local Codex CLI config and do not need a CONNECT provider key
 - [Create projects for agents to work in real folders](projects.md)
 - [Let agents open the web & click through tasks for you (web automation)](web-automation.md)
 - [Give orders by voice + feed mode](voice-feed.md)

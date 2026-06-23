@@ -26,6 +26,25 @@ Everyone is arranged into an automatic org chart (🗂 → ORG): CEO → Directo
 | Prompt + Persona v2 | Their identity: expertise / personality / language / working rules |
 | Skills / Tools | Special abilities + the tools they're allowed |
 
+## Roles are templates, agents are the runtime
+
+The **ROLES** tab is now a template layer:
+
+- `runtime` default for the role
+- default tier
+- default skills / tools
+- persona seed for future hires
+
+The **AGENTS** row is still the execution truth:
+
+1. `agent.runtime` wins if it is set
+2. otherwise the agent inherits `role.runtime`
+3. otherwise it uses the office default runtime
+
+If an agent is set to **Codex**, it uses the local Codex CLI config and does **not**
+need a BagIdea CONNECT provider key. The Claude brain/provider controls stay for
+Claude-style agents only.
+
 Don't feel like writing a persona yourself? Type a short one-line brief and press
 **✨ Draft** — the Persona Copilot drafts every field for you (prompt, expertise, personality,
 language, working rules) **and picks the skills + tools that fit the role** (only from what
