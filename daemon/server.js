@@ -2529,6 +2529,8 @@ function runSubAgents(parentId, parentEntry, tasks, onDone) {
 // One ghost: a lean twin of runClaude. Pre-created "@sub" entry, parent's
 // tools, no skills preamble, no resume, and never splits further.
 function runSub(parentId, subId, taskText, entry, onDone) {
+  if (runtimeConfig.effectiveAgentRuntime(reg, parentId) === "codex")
+    return runCodexSub(parentId, subId, taskText, entry, onDone);
   const a = reg.agents[parentId] || { name: parentId, role: "Staff" };
   const picked = a.tools && a.tools.length ? a.tools
     : ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
@@ -2623,6 +2625,96 @@ function runSub(parentId, subId, taskText, entry, onDone) {
   });
   child.stderr.on("data", (c) => console.error(`[sub:${subId}]`, c.toString().trim()));
   child.on("error", () => finish(false));
+  child.on("close", () => finish(!!lastText));
+}
+
+function runCodexSub(parentId, subId, taskText, entry, onDone) {
+  const a = reg.agents[parentId] || { name: parentId, role: "Staff", prompt: "" };
+  const subCwd = (entry.proj && projectDir(entry.proj)) || WORKSPACE;
+  const spec = codexRuntime.codexSpawnSpec({
+    cwd: subCwd,
+    threadId: entry.codexThread || "",
+    useWsl: process.platform === "win32" && !!reg.codexUseWsl,
+    distro: reg.codexWslDistro || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: subId, OFFICE_TASK: entry.key },
+  });
+  child.stdin.write(
+    `You are a temporary SUB-AGENT — a parallel clone of "${a.name}" (${a.role}) ` +
+    `at this AI office.` +
+    (a.prompt ? `\nParent persona:\n${a.prompt}\n` : "\n") +
+    `You were split off for ONE focused job. Do it fast and directly; your final ` +
+    `message must BE the result (data, findings, answer) — no meta talk, no asking ` +
+    `back. Reply in the language of the job. Never split further.\n\nJOB: ${taskText}`);
+  child.stdin.end();
+  let buf = "", lastText = "", errText = "", finished = false;
+  const finish = (ok) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(watchdog);
+    onDone(lastText || (!ok ? errText.trim() : ""), ok);
+  };
+  const watchdog = setTimeout(() => {
+    killTree(child);
+    finish(false);
+  }, 6 * 60000);
+  child.stdout.on("data", (c) => {
+    buf += c;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      const ev = codexRuntime.parseCodexJsonLine(line);
+      if (!ev) continue;
+      if (ev.type === "thread.started" && ev.thread_id) {
+        entry.codexThread = ev.thread_id;
+        saveSess();
+      } else if (ev.type === "item.started") {
+        const label = codexRuntime.codexProgressLabel(ev);
+        if (!label) continue;
+        entry.log.push({ who: "tool", text: label, ts: Date.now() });
+        while (entry.log.length > 200) entry.log.shift();
+        saveSess();
+        broadcast({ type: "subagent.progress", agent: parentId, sub: subId,
+          tool: label, session: entry.key, runtime: "codex", model: "codex" });
+      } else if (ev.type === "item.completed") {
+        const txt = codexRuntime.codexTextFromEvent(ev);
+        if (txt) {
+          lastText = txt;
+          entry.log.push({ who: "agent", text: txt.slice(0, 8000),
+            ts: Date.now(), runtime: "codex", model: "codex" });
+          while (entry.log.length > 200) entry.log.shift();
+          entry.ts = Date.now();
+          saveSess();
+          broadcast({ type: "chat.message", agent: parentId, sub: subId,
+            text: txt, session: entry.key, runtime: "codex", model: "codex" });
+        } else {
+          const label = codexRuntime.codexProgressLabel(ev);
+          if (label) broadcast({ type: "subagent.progress", agent: parentId, sub: subId,
+            tool: label, session: entry.key, runtime: "codex", model: "codex" });
+        }
+      } else if (ev.type === "turn.completed") {
+        statBump("done");
+        finish(true);
+      } else if (ev.type === "error" || ev.type === "turn.failed") {
+        errText += "\n" + String(ev.message || ev.error || "codex failed");
+        statBump("failed");
+        finish(false);
+      }
+    }
+  });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error(`[sub:${subId}:codex]`, s.trim());
+  });
+  child.on("error", (e) => { errText += "\n" + e.message; finish(false); });
   child.on("close", () => finish(!!lastText));
 }
 
