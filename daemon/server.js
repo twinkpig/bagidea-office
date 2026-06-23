@@ -4461,6 +4461,30 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ loggedIn, viaKey, connected: loggedIn || viaKey }));
 
+  } else if (req.method === "GET" && req.url === "/codex/status") {
+    // Codex owns its own auth/config. We only verify that the CLI reachable from
+    // this daemon can start; on Windows it may be bridged through WSL.
+    const { execFile } = require("child_process");
+    const useWsl = process.platform === "win32" && !!reg.codexUseWsl;
+    const distro = String(reg.codexWslDistro || "");
+    const command = useWsl ? "wsl.exe" : "codex";
+    const args = useWsl
+      ? [...(distro ? ["-d", distro] : []), "--", "codex", "--version"]
+      : ["--version"];
+    execFile(command, args, { timeout: 5000, windowsHide: true }, (e, out, err) => {
+      const version = codexRuntime.parseVersionOutput(out || err);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: !e,
+        connected: !e,
+        version,
+        useWsl,
+        distro,
+        command: useWsl ? "wsl.exe codex" : "codex",
+        error: e ? String(e.message || e).slice(0, 500) : "",
+      }));
+    });
+
   } else if (req.method === "POST" && req.url === "/claude/login") {
     // 🔓 Open a terminal running `claude` so the user completes browser OAuth login.
     try {
