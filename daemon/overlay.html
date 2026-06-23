@@ -3289,19 +3289,20 @@
          <option value="2">หัวหน้าทีม (Lead)</option>
          <option value="3">ทีมงาน (Staff)</option>
        </select></div>
-       <div class="field"><label>⚙ RUNTIME — ตัว CLI ที่ใช้ทำงานจริง</label>
+       <div class="field" id="brainField"><label>⚙ RUNTIME + 🧠 สมอง (โมเดล/ผู้ให้บริการ)</label>
          <select id="eRuntime"></select>
          <div id="eRuntimeHint" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
-       </div>
-       <div class="field" id="brainField"><label>🧠 สมอง (โมเดล/ผู้ให้บริการ) — ใช้กับ Claude runtime เท่านั้น</label>
-         <select id="eProvider"></select>
-         <div id="eModelWrap" style="position:relative;margin-top:6px">
-           <input id="eModel" autocomplete="off" maxlength="60" style="margin:0;width:100%" placeholder="โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)">
-           <div id="eModelMenu" class="cbmenu"></div>
-         </div>
-         <div id="eProvWarn" style="display:none;margin-top:6px;font-size:11px">
-           <span style="color:#ffb054">⚠ ยังไม่ได้เชื่อมต่อ provider นี้</span>
-           <button class="send" id="eGoConnect" style="margin-left:6px">🔗 ไปหน้า CONNECT</button>
+         <div style="font-size:10.5px;color:var(--dim);margin:6px 0 4px">Brain/provider settings below apply to Claude runtime only; Codex uses its own CLI config.</div>
+         <div id="brainModelBlock">
+           <select id="eProvider"></select>
+           <div id="eModelWrap" style="position:relative;margin-top:6px">
+             <input id="eModel" autocomplete="off" maxlength="60" style="margin:0;width:100%" placeholder="โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)">
+             <div id="eModelMenu" class="cbmenu"></div>
+           </div>
+           <div id="eProvWarn" style="display:none;margin-top:6px;font-size:11px">
+             <span style="color:#ffb054">⚠ ยังไม่ได้เชื่อมต่อ provider นี้</span>
+             <button class="send" id="eGoConnect" style="margin-left:6px">🔗 ไปหน้า CONNECT</button>
+           </div>
          </div>
          <div style="font-size:10.5px;color:var(--dim);margin-top:4px">Claude ใช้ login/แผนเดิม · เจ้าอื่นใช้ key แยก (ประหยัดกว่า)</div>
        </div>
@@ -3444,6 +3445,7 @@
       const runtimeSel = modalCard.querySelector("#eRuntime");
       const runtimeHint = modalCard.querySelector("#eRuntimeHint");
       const brainField = modalCard.querySelector("#brainField");
+      const brainModelBlock = modalCard.querySelector("#brainModelBlock");
       let refreshBrainForRuntime = () => {};
       const inheritedRuntime = () =>
         normRuntime(roleProfile(roleSel.value).runtime) || normRuntime(DEFAULT_RUNTIME) || "claude";
@@ -3464,7 +3466,8 @@
         if (runtimeHint) runtimeHint.textContent = runtimeSel.value
           ? `Override: ${runtimeName(rt)}`
           : `Inherited from ${normRuntime(roleProfile(roleSel.value).runtime) ? "role" : "default"}: ${runtimeName(rt)}`;
-        if (brainField) brainField.style.display = rt === "codex" ? "none" : "";
+        if (brainField) brainField.style.display = "";
+        if (brainModelBlock) brainModelBlock.style.display = rt === "codex" ? "none" : "";
       };
       if (runtimeSel) {
         renderRuntimeOptions();
