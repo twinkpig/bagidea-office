@@ -4559,11 +4559,8 @@ const server = http.createServer((req, res) => {
     const { execFile } = require("child_process");
     const useWsl = process.platform === "win32" && !!reg.codexUseWsl;
     const distro = String(reg.codexWslDistro || "");
-    const command = useWsl ? "wsl.exe" : "codex";
-    const args = useWsl
-      ? [...(distro ? ["-d", distro] : []), "--", "codex", "--version"]
-      : ["--version"];
-    execFile(command, args, { timeout: 5000, windowsHide: true }, (e, out, err) => {
+    const spec = codexRuntime.codexVersionSpawnSpec({ useWsl, distro });
+    execFile(spec.command, spec.args, { timeout: 8000, windowsHide: true }, (e, out, err) => {
       const version = codexRuntime.parseVersionOutput(out || err);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
@@ -4572,7 +4569,7 @@ const server = http.createServer((req, res) => {
         version,
         useWsl,
         distro,
-        command: useWsl ? "wsl.exe codex" : "codex",
+        command: useWsl ? "wsl.exe shell codex" : "codex",
         error: e ? String(e.message || e).slice(0, 500) : "",
       }));
     });

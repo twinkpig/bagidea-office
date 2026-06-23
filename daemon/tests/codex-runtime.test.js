@@ -3,6 +3,7 @@ const assert = require("node:assert");
 const {
   codexExecArgs,
   codexSpawnSpec,
+  codexVersionSpawnSpec,
   parseCodexJsonLine,
   codexProgressLabel,
   codexTextFromEvent,
@@ -77,20 +78,35 @@ test("codexSpawnSpec runs direct codex on non-Windows platforms", () => {
   });
 });
 
-test("codexSpawnSpec runs through wsl.exe on Windows when requested", () => {
-  assert.deepStrictEqual(codexSpawnSpec({
+test("codexSpawnSpec runs through the WSL user shell on Windows when requested", () => {
+  const spec = codexSpawnSpec({
     platform: "win32",
     cwd: "F:\\repo",
     useWsl: true,
     distro: "Ubuntu-24.04",
-  }), {
-    command: "wsl.exe",
-    args: ["-d", "Ubuntu-24.04", "--", "codex", "exec", "--json", "-C", "/mnt/f/repo", "-"],
-    cwd: "F:\\repo",
-    shell: false,
   });
+  assert.strictEqual(spec.command, "wsl.exe");
+  assert.deepStrictEqual(spec.args.slice(0, 5), ["-d", "Ubuntu-24.04", "--exec", "/bin/sh", "-lc"]);
+  assert.match(spec.args[5], /codex/);
+  assert.match(spec.args[5], /exec/);
+  assert.match(spec.args[5], /\/mnt\/f\/repo/);
+  assert.strictEqual(spec.cwd, "F:\\repo");
+  assert.strictEqual(spec.shell, false);
+});
+
+test("codexVersionSpawnSpec uses the same WSL shell bridge", () => {
+  const spec = codexVersionSpawnSpec({ platform: "win32", useWsl: true });
+  assert.strictEqual(spec.command, "wsl.exe");
+  assert.deepStrictEqual(spec.args.slice(0, 3), ["--exec", "/bin/sh", "-lc"]);
+  assert.match(spec.args[3], /codex/);
+  assert.match(spec.args[3], /--version/);
+  assert.strictEqual(spec.shell, false);
 });
 
 test("parseVersionOutput trims a version string", () => {
   assert.strictEqual(parseVersionOutput("codex-cli 1.2.3\n"), "codex-cli 1.2.3");
+});
+
+test("parseVersionOutput skips WSL warning noise", () => {
+  assert.strictEqual(parseVersionOutput("w\u0000s\u0000l\u0000 warning\n\u0000codex-cli 1.2.3\n"), "codex-cli 1.2.3");
 });
