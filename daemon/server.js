@@ -1409,7 +1409,26 @@ SUB: <งานย่อยที่ชัดเจนครบถ้วนใ�
 ระบบจะส่งร่างโคลนไปทำขนานกัน แล้วรวมผลกลับมาให้คุณสรุปเป็นคำตอบสุดท้าย.
 </system-capability>`;
 
+function runCodexRuntime(agent, prompt, opts = {}) {
+  const task = "t" + ++taskCounter;
+  broadcast({ type: "task.failed", agent, task, reason: "codex runtime not installed yet" });
+  broadcast({ type: "chat.message", agent, task,
+    text: "Codex runtime is configured for this agent, but this build has not installed the Codex adapter yet." });
+  if (opts.onDone) try { opts.onDone("", false); } catch {}
+  return task;
+}
+
+function runAgent(agent, prompt, opts = {}) {
+  const runtime = runtimeConfig.effectiveAgentRuntime(reg, agent);
+  if (runtime === "codex") return runCodexRuntime(agent, prompt, opts);
+  return runClaudeRuntime(agent, prompt, opts);
+}
+
 function runClaude(agent, prompt, opts = {}) {
+  return runAgent(agent, prompt, opts);
+}
+
+function runClaudeRuntime(agent, prompt, opts = {}) {
   const task = "t" + ++taskCounter;
 
   // Session resolution: explicit key > latest > fresh. Fresh threads are
@@ -2870,6 +2889,7 @@ const plugins = require("./plugins")({
   broadcast, reg, saveReg, workspace: WORKSPACE, daemonDir: __dirname,
   // run a real Claude Code turn as an agent (same engine the office uses).
   runClaude: (agent, prompt, opts) => runClaude(agent || "main", prompt, opts || {}),
+  runAgent: (agent, prompt, opts) => runAgent(agent || "main", prompt, opts || {}),
   // post a visible line to the office feed (shows in the overlay stream).
   feed: (text, agent) => broadcast({ type: "chat.message", agent: agent || "main", text: String(text) }),
   log: (s) => console.log(s),
