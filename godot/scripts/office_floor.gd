@@ -32,6 +32,17 @@ var _occ_check_timer := 0.0
 var _occluded := false
 var _fps_log_timer := 0.0
 
+func wallpaper_active_fps() -> int:
+	# Windows desktop embedding currently has no reliable occlusion monitor in the
+	# shell, so keep the always-on wallpaper conservative by default.
+	return 12 if OS.get_name() == "Windows" else 30
+
+func wallpaper_hidden_fps() -> int:
+	return 2
+
+func set_wallpaper_visible(on: bool) -> void:
+	Engine.max_fps = wallpaper_active_fps() if on else wallpaper_hidden_fps()
+
 func _ready() -> void:
 	_wallpaper_mode = "--wallpaper" in OS.get_cmdline_user_args()
 	for arg in OS.get_cmdline_user_args():
@@ -68,12 +79,12 @@ func _ready() -> void:
 	if "--wallpaper" in OS.get_cmdline_user_args():
 		# NB: borderless/fullscreen/opaque happen in _opaque_after_first_frame
 		# — touching the window mid-load repaints the splash on black.
-		# Wallpaper rung: 30 fps, NATIVE render + MSAA 2x — the measured sweet
-		# spot (FSR upscale read as jaggies; 4x MSAA costs +10% GPU for little
-		# visible gain at wallpaper distance).
-		Engine.max_fps = 30
-		get_viewport().scaling_3d_scale = 1.0
-		get_viewport().msaa_3d = Viewport.MSAA_2X
+		# Wallpaper rung. Windows keeps the renderer alive even when the desktop
+		# is covered, so use a lower-cost default there.
+		set_wallpaper_visible(true)
+		var low_power := OS.get_name() == "Windows"
+		get_viewport().scaling_3d_scale = 0.75 if low_power else 1.0
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED if low_power else Viewport.MSAA_2X
 		var env: Environment = $WorldEnvironment.environment
 		env.ssao_enabled = false
 		env.ssr_max_steps = 24
@@ -85,8 +96,8 @@ func _ready() -> void:
 		# far wallpaper camera or shadows vanish entirely when zoomed out). Spread
 		# over that large area, 4096 read soft/faint at normal zoom — 8192 packs
 		# enough texels to stay CRISP at the far camera, the same way the map
-		# concentrates when you zoom in. Worth the GPU at the 30 fps wallpaper rung.
-		RenderingServer.directional_shadow_atlas_set_size(8192, true)
+		# concentrates when you zoom in. Windows local-custom mode favors GPU headroom.
+		RenderingServer.directional_shadow_atlas_set_size(2048 if low_power else 8192, true)
 		var cam: Camera3D = $CameraRig/Camera3D
 		cam.attributes.dof_blur_far_enabled = false
 		cam.attributes.dof_blur_near_enabled = false
@@ -198,7 +209,7 @@ func _process(delta: float) -> void:
 			var now_occ := FileAccess.open("/private/tmp/bagidea_occ", FileAccess.READ) != null
 			if now_occ != _occluded:
 				_occluded = now_occ
-				Engine.max_fps = 2 if _occluded else 30
+				set_wallpaper_visible(not _occluded)
 
 		# FPS telemetry for perf testing: write actual fps to /tmp/bagidea_fps once/sec.
 		_fps_log_timer += delta
