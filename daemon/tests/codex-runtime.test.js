@@ -18,7 +18,7 @@ test("codexExecArgs reads the prompt from stdin", () => {
 
 test("codexExecArgs can resume a thread id", () => {
   assert.deepStrictEqual(codexExecArgs({ cwd: "/home/a/project", threadId: "tid-1" }), [
-    "exec", "--json", "-C", "/home/a/project", "resume", "tid-1",
+    "exec", "--json", "-C", "/home/a/project", "resume", "tid-1", "-",
   ]);
 });
 

@@ -2,7 +2,7 @@
 
 function codexExecArgs({ cwd, threadId }) {
   const args = ["exec", "--json", "-C", String(cwd || ".")];
-  if (threadId) args.push("resume", String(threadId));
+  if (threadId) args.push("resume", String(threadId), "-");
   else args.push("-");
   return args;
 }

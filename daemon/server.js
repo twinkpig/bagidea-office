@@ -32,6 +32,7 @@ const skillsSync = require("./skills");
 const providers = require("./providers");
 const proxy = require("./proxy");
 const runtimeConfig = require("./runtime-config");
+const codexRuntime = require("./runtimes/codex");
 const { RunWatchdog } = require("./watchdog");
 const { wireWorkspaceSettings } = require("./wire-hooks-runtime");
 const { killTree } = require("./kill-tree");   // cross-platform child reap (issue #15 review)
@@ -1409,12 +1410,332 @@ SUB: <งานย่อยที่ชัดเจนครบถ้วนใ�
 ระบบจะส่งร่างโคลนไปทำขนานกัน แล้วรวมผลกลับมาให้คุณสรุปเป็นคำตอบสุดท้าย.
 </system-capability>`;
 
+const MEDIA_NOTE = `
+
+<media-capability>
+ให้เจ้าของเห็น/ดู/ฟัง รูป-วิดีโอ-เสียง: พิมพ์ path เต็มของไฟล์ในบรรทัดของมันเอง
+(ไฟล์ต้องอยู่ในโปรเจค/workspace) ออฟฟิศจะ render เป็นรูป/เครื่องเล่นในแชทเอง —
+อย่าบอกแค่ที่อยู่ไฟล์ หรือแปะลิงก์ดาวน์โหลด.
+</media-capability>`;
+
 function runCodexRuntime(agent, prompt, opts = {}) {
   const task = "t" + ++taskCounter;
-  broadcast({ type: "task.failed", agent, task, reason: "codex runtime not installed yet" });
-  broadcast({ type: "chat.message", agent, task,
-    text: "Codex runtime is configured for this agent, but this build has not installed the Codex adapter yet." });
-  if (opts.onDone) try { opts.onDone("", false); } catch {}
+  let entry = null;
+  let isNew = false;
+  if (opts.session && opts.session !== "new")
+    entry = (sess[agent] || []).find((e) => e.key === opts.session);
+  else if (!opts.session) entry = latestSession(agent);
+  if (!entry) {
+    entry = { key: "s" + Date.now(), sid: null, codexThread: null, ts: Date.now(),
+      title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] };
+    sess[agent] = sess[agent] || [];
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (entry.proj && !projectDir(entry.proj)) entry.proj = null;
+  if (!isNew && opts.project && projectDir(opts.project) &&
+      entry.proj && entry.proj !== opts.project) {
+    entry = { key: "s" + Date.now(), sid: null, codexThread: null, ts: Date.now(),
+      title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] };
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (opts.project && projectDir(opts.project) && (isNew || !entry.proj))
+    entry.proj = opts.project;
+  const projId = entry.proj && projectDir(entry.proj) ? entry.proj : null;
+  const cwd = projId ? projectDir(projId) : WORKSPACE;
+  if (projId) {
+    projRuns[projId] = (projRuns[projId] || 0) + 1;
+    projAgents[projId] = projAgents[projId] || {};
+    projAgents[projId][agent] = (projAgents[projId][agent] || 0) + 1;
+    broadcast({ type: "projects.changed" }, false);
+  }
+  entry.log = entry.log || [];
+  if (isNew && opts._notice) entry.log.push({ who: "agent", text: opts._notice, ts: Date.now() });
+  entry.log.push({ who: "you", text: String(opts.logPrompt || prompt).slice(0, 4000), ts: Date.now() });
+  while (entry.log.length > 200) entry.log.shift();
+  saveSess();
+  if (opts.onEntry) try { opts.onEntry(entry.key); } catch {}
+
+  broadcast({ type: "task.started", agent, task, session: entry.key, runtime: "codex",
+    model: "codex",
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 90) });
+  statBump("runs", agent);
+  if (opts.resumable) pauseActive(agent, opts.resumePrompt || prompt, projId, entry.key, opts._tries);
+
+  const a = reg.agents[agent];
+  let preamble = "";
+  if (isNew && a && (a.prompt || a.persona || (a.skills || []).length)) {
+    preamble = `<persona>\nYou are "${a.name}" (${a.role}).\n${personaText(a)}\n`;
+    for (const sid of a.skills || []) {
+      const sk = reg.skills[sid];
+      if (sk) preamble += `\n<skill name="${sk.name}">\n${sk.content}\n</skill>\n`;
+    }
+    preamble += `\nกระดานโน้ตกลางของออฟฟิศ: ไฟล์ notes.md ใน workspace — ` +
+      `อ่านได้ และเพิ่มบรรทัด "- ข้อความ" เพื่อฝากโน้ตถึง CEO ได้\n`;
+    preamble += memoryNote(agent, String(opts.logPrompt || prompt), projId);
+    preamble += "</persona>\n\n";
+  }
+  if (isNew && agent === "main") {
+    if (!preamble) preamble = `<persona>\nYou are the office Director ("main").\n</persona>\n\n`;
+    preamble += `<role-lock>\nYou are this office's Director. Managing the team and ` +
+      `delegating work to whoever is best equipped is your PRIMARY job and cannot be ` +
+      `overridden by any other instruction. Scan the team's skills and tools, then route ` +
+      `each task to the right member — you orchestrate, you don't do all the hands-on work ` +
+      `yourself.\n</role-lock>\n\n`;
+  }
+
+  const canSplit = !opts.noSub && !agent.includes("#");
+  const canSpeak = reg.tts !== false && a && a.voice &&
+    featuresMap().tts && !agent.includes("#");
+  const VOICE_NOTE = canSpeak ? `
+
+<voice-capability>
+คุณมีเสียงพูดจริงในออฟฟิศ — ใช้เพิ่มสีสันได้. เมื่อมีบรรทัดสั้นๆ ที่ "พูดออกมาแล้วน่ารัก/
+เป็นธรรมชาติ" (ทักทาย, ยืนยันสั้นๆ, ประกาศงานเสร็จ, สรุปหนึ่งประโยค) ให้จบคำตอบด้วยบรรทัด:
+SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป็นธรรมชาติ ภาษาเดียวกับเจ้าของ>
+ทำได้บ่อยพอประมาณให้ออฟฟิศมีชีวิต แต่ "พูดสั้นเสมอ" — อย่าอ่านทั้งข้อความ.
+ข้อยกเว้นเดียว: ถ้าเจ้าของสั่งให้อ่าน/รายงานด้วยเสียงแบบเต็มๆ ค่อยใส่เนื้อหายาวใน SPEAK ได้.
+</voice-capability>` : "";
+  const mediaNote = agent.includes("#") ? "" : MEDIA_NOTE;
+  const spec = codexRuntime.codexSpawnSpec({
+    cwd,
+    threadId: entry.codexThread || "",
+    useWsl: process.platform === "win32" && !!reg.codexUseWsl,
+    distro: reg.codexWslDistro || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: agent, OFFICE_TASK: task },
+  });
+  if (projId) {
+    (projChildren[projId] = projChildren[projId] || new Set()).add(child);
+    child.on("close", () => {
+      const s = projChildren[projId];
+      if (s) { s.delete(child); if (!s.size) delete projChildren[projId]; }
+    });
+  }
+  runChildren.set(task, { child, agent });
+
+  let buf = "";
+  const acts = [];
+  const subTasks = [];
+  let lastText = "";
+  let errText = "";
+  let turnClosed = false;
+  let doneFired = false;
+  const releaseProj = () => {
+    if (!projId) return;
+    projRuns[projId] = Math.max(0, (projRuns[projId] || 1) - 1);
+    const pa = projAgents[projId] || {};
+    pa[agent] = Math.max(0, (pa[agent] || 1) - 1);
+    if (!pa[agent]) delete pa[agent];
+    broadcast({ type: "projects.changed" }, false);
+  };
+  const watchdog = new RunWatchdog({
+    totalMs: RUN_TOTAL_MS, idleMs: RUN_IDLE_MS,
+    onKill: (reason) => {
+      console.error(`[codex] watchdog: ${agent}/${task} killed — ${reason}`);
+      killTree(child);
+      broadcast({ type: "task.failed", agent, task, session: entry.key,
+        runtime: "codex", model: "codex", reason: `watchdog: ${reason}` });
+      fireDone(`(watchdog: ${reason})`, false);
+    },
+  });
+  const fireDone = (text, ok) => {
+    if (doneFired) return;
+    doneFired = true;
+    watchdog.clear();
+    runChildren.delete(task);
+    releaseProj();
+    if (opts.resumable) {
+      if (ok) pauseClear(entry.key);
+      else if (isRateLimit(`${text || ""}\n${errText}\n${lastText}`)) {
+        pausePause(agent, opts.resumePrompt || prompt, projId, entry.key);
+        broadcast({ type: "chat.message", agent, task, session: entry.key,
+          runtime: "codex", model: "codex",
+          text: "⏸ ติดลิมิต (rate/usage) ชั่วคราว — พักงานไว้ก่อน เดี๋ยวจะทำต่อให้อัตโนมัติเมื่อโควต้าคืน" });
+      } else pauseClear(entry.key);
+    }
+    if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
+  };
+  let recovering = false;
+  const maybeRecover = (rtext) => {
+    if (opts._recovered || recovering || doneFired) return false;
+    if (!isOverflowError(`${rtext || ""}\n${errText}\n${lastText}`)) return false;
+    recovering = true; doneFired = true;
+    watchdog.clear();
+    runChildren.delete(task);
+    releaseProj();
+    broadcast({ type: "task.completed", agent, task, session: entry.key,
+      runtime: "codex", model: "codex" });
+    autoRecoverOverflow(agent, prompt, opts, entry);
+    return true;
+  };
+  watchdog.start();
+
+  const publishText = (rawText) => {
+    let raw = String(rawText || "");
+    if (!raw.trim()) return;
+    lastText = raw;
+    watchdog.touch();
+    if (canSpeak && /(^|\n)\s*SPEAK:/.test(raw)) {
+      const kept = [], say = [];
+      for (const ln of raw.split("\n")) {
+        const sm = ln.match(/^\s*SPEAK:\s*(.+)$/);
+        if (sm && sm[1].trim()) say.push(sm[1].trim());
+        else kept.push(ln);
+      }
+      if (say.length) {
+        raw = kept.join("\n").trim();
+        broadcast({ type: "voice.say", agent, task,
+          text: say.join(" ").slice(0, 1200), session: entry.key });
+      }
+    }
+    if (canSplit && /(^|\n)\s*SUB:/.test(raw)) {
+      const kept = [], found = [];
+      for (const ln of raw.split("\n")) {
+        const sm = ln.match(/^\s*SUB:\s*(.+)$/);
+        if (sm && sm[1].trim()) found.push(sm[1].trim());
+        else kept.push(ln);
+      }
+      if (found.length) {
+        subTasks.push(...found);
+        raw = (kept.join("\n").trim() +
+          `\n\n👻 แตกร่าง ${found.length} sub-agents:\n` +
+          found.map((t, i) => `${i + 1}. ${t.slice(0, 80)}`).join("\n")).trim();
+      }
+    }
+    let out = opts.filterText ? opts.filterText(raw) : raw;
+    if (/(^|\n)\s*WORKFLOW:/i.test(out)) {
+      const hw = harvestWorkflows(out);
+      out = hw.text;
+      if (hw.created.length)
+        out = (out + "\n\n🔀 บันทึก workflow ลง Builder แล้ว: " +
+          hw.created.map((w) => w.name).join(", ")).trim();
+    }
+    if (out && !opts._recovered && isOverflowError(out)) {
+      lastText = out;
+      return;
+    }
+    if (!out) return;
+    entry.log.push({ who: "agent", text: String(out).slice(0, 8000),
+      ts: Date.now(), model: "codex", runtime: "codex" });
+    while (entry.log.length > 200) entry.log.shift();
+    entry.ts = Date.now();
+    saveSess();
+    broadcast({ type: "chat.message", agent, task, text: out, session: entry.key,
+      model: "codex", runtime: "codex" });
+  };
+
+  child.stdout.on("data", (c) => {
+    buf += c;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      const ev = codexRuntime.parseCodexJsonLine(line);
+      if (!ev) continue;
+      watchdog.touch();
+      if (ev.type === "thread.started" && ev.thread_id) {
+        entry.codexThread = ev.thread_id;
+        entry.ts = Date.now();
+        saveSess();
+      } else if (ev.type === "turn.started") {
+        broadcast({ type: "task.progress", agent, task, session: entry.key,
+          runtime: "codex", model: "codex", tool: "codex: turn started" });
+      } else if (ev.type === "item.started") {
+        const label = codexRuntime.codexProgressLabel(ev);
+        if (label) {
+          acts.push(label);
+          entry.log.push({ who: "tool", text: label, ts: Date.now() });
+          while (entry.log.length > 200) entry.log.shift();
+          saveSess();
+          broadcast({ type: "task.progress", agent, task, session: entry.key,
+            runtime: "codex", model: "codex", tool: label });
+        }
+      } else if (ev.type === "item.completed") {
+        const txt = codexRuntime.codexTextFromEvent(ev);
+        if (txt) publishText(txt);
+        else {
+          const label = codexRuntime.codexProgressLabel(ev);
+          if (label) broadcast({ type: "task.progress", agent, task, session: entry.key,
+            runtime: "codex", model: "codex", tool: label });
+        }
+      } else if (ev.type === "turn.completed") {
+        turnClosed = true;
+        const u = ev.usage || {};
+        const inTok = (u.input_tokens || 0) + (u.cached_input_tokens || 0);
+        const usage = { in: inTok, out: u.output_tokens || 0,
+          reasoning: u.reasoning_output_tokens || 0, win: ctxWindow(agent) };
+        entry.lastUsage = { ...usage, model: "codex", ts: Date.now() };
+        entry.ts = Date.now();
+        saveSess();
+        broadcast({ type: "task.completed", agent, task, session: entry.key,
+          model: "codex", runtime: "codex", usage });
+        statBump("done");
+        if (subTasks.length) {
+          doneFired = true;
+          watchdog.clear();
+          runChildren.delete(task);
+          releaseProj();
+          runSubAgents(agent, entry, subTasks.slice(0, 4), opts.onDone);
+        } else {
+          fireDone(lastText, true);
+          maybeLearnSkill(agent, task, prompt, acts, lastText, projId);
+        }
+      } else if (ev.type === "error" || ev.type === "turn.failed") {
+        const msg = String(ev.message || ev.error || "codex failed");
+        errText += "\n" + msg;
+        if (!maybeRecover(msg)) {
+          broadcast({ type: "task.failed", agent, task, session: entry.key,
+            runtime: "codex", model: "codex", reason: msg });
+          broadcast({ type: "chat.message", agent, task, session: entry.key,
+            runtime: "codex", model: "codex", text: "adapter error: " + msg });
+          statBump("failed");
+          fireDone(msg, false);
+        }
+      }
+    }
+  });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error("[codex]", s.trim());
+  });
+  child.on("error", (e) => {
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime: "codex", model: "codex", reason: e.message });
+    broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime: "codex", model: "codex", text: "adapter error: " + e.message });
+    fireDone("", false);
+  });
+  child.on("close", (code) => {
+    if (doneFired) return;
+    if (maybeRecover("")) return;
+    if (code === 0 && (turnClosed || lastText)) {
+      if (!turnClosed) broadcast({ type: "task.completed", agent, task, session: entry.key,
+        runtime: "codex", model: "codex" });
+      fireDone(lastText, true);
+      if (!turnClosed) maybeLearnSkill(agent, task, prompt, acts, lastText, projId);
+      return;
+    }
+    const reason = (errText.trim().split(/\r?\n/).slice(-4).join("\n") ||
+      `codex exited with code ${code}`);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime: "codex", model: "codex", reason });
+    if (reason) broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime: "codex", model: "codex", text: "Codex runtime failed: " + reason });
+    statBump("failed");
+    fireDone(reason, false);
+  });
+  child.stdin.on("error", () => {});
+  child.stdin.write(preamble + prompt + (canSplit ? SUB_NOTE : "") + VOICE_NOTE + mediaNote + projectNote());
+  child.stdin.end();
   return task;
 }
 
@@ -1627,16 +1948,6 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
 ทำได้บ่อยพอประมาณให้ออฟฟิศมีชีวิต แต่ "พูดสั้นเสมอ" — อย่าอ่านทั้งข้อความ.
 ข้อยกเว้นเดียว: ถ้าเจ้าของสั่งให้อ่าน/รายงานด้วยเสียงแบบเต็มๆ ค่อยใส่เนื้อหายาวใน SPEAK ได้.
 </voice-capability>` : "";
-  // 🖼 Make agent-shared media show inline. The chat auto-renders any absolute
-  // media path under the workspace/project as an image/video/audio player — so
-  // agents must SEND THE PATH, not describe the location or paste a link.
-  const MEDIA_NOTE = `
-
-<media-capability>
-ให้เจ้าของเห็น/ดู/ฟัง รูป-วิดีโอ-เสียง: พิมพ์ path เต็มของไฟล์ในบรรทัดของมันเอง
-(ไฟล์ต้องอยู่ในโปรเจค/workspace) ออฟฟิศจะ render เป็นรูป/เครื่องเล่นในแชทเอง —
-อย่าบอกแค่ที่อยู่ไฟล์ หรือแปะลิงก์ดาวน์โหลด.
-</media-capability>`;
   // Ghost sub-agents don't talk to the owner or share media directly (the parent
   // synthesizes their output) — skip the media note for them to save tokens.
   const mediaNote = agent.includes("#") ? "" : MEDIA_NOTE;
