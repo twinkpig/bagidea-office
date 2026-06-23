@@ -31,6 +31,7 @@ const retrieval = require("./retrieval");
 const skillsSync = require("./skills");
 const providers = require("./providers");
 const proxy = require("./proxy");
+const runtimeConfig = require("./runtime-config");
 const { RunWatchdog } = require("./watchdog");
 const { wireWorkspaceSettings } = require("./wire-hooks-runtime");
 const { killTree } = require("./kill-tree");   // cross-platform child reap (issue #15 review)
@@ -84,8 +85,11 @@ function loadReg() {
   // Per-agent model/provider routing (the swappable brain). Per-provider creds +
   // optional baseUrl/model overrides live here; agents opt in via a.provider.
   reg.providerConfig = reg.providerConfig || {};   // { glm:{token}, litellm:{baseUrl,token}, ... }
-  reg.roles = reg.roles || ["Director", "Founder", "Researcher", "Engineer",
+  reg.roles = Array.isArray(reg.roles) ? reg.roles : ["Director", "Founder", "Researcher", "Engineer",
     "Designer", "Analyst", "Operator", "Specialist"];
+  reg.roleProfiles = reg.roleProfiles && typeof reg.roleProfiles === "object" ? reg.roleProfiles : {};
+  reg.defaultRuntime = runtimeConfig.normalizeRuntime(reg.defaultRuntime) || "claude";
+  for (const r of reg.roles) if (!reg.roleProfiles[r]) reg.roleProfiles[r] = {};
   reg.skills = reg.skills || {};
   // Seed / refresh the builtin starter library. We own entries flagged
   // `builtin` (so updates propagate new wording), but never touch a user's
@@ -234,6 +238,8 @@ function monitorCount() {
 
 function rosterEvt() {
   return { type: "roster.sync", agents: reg.agents, roles: reg.roles,
+    roleProfiles: reg.roleProfiles || {}, defaultRuntime: reg.defaultRuntime || "claude",
+    runtimes: ["claude", "codex"],
     tools: reg.tools, builtinTools: BUILTIN_TOOLS, mcp: reg.mcpServers,
     skills: reg.skills, autoSkills: reg.autoSkills !== false,
     verifyDelegated: reg.verifyDelegated === true,
@@ -3452,6 +3458,9 @@ const server = http.createServer((req, res) => {
           provider: (providers.PROVIDERS[p.provider] || (reg.providerConfig && reg.providerConfig[p.provider]))
             ? p.provider : (cur.provider || "claude"),
           model: String(p.model !== undefined ? p.model : (cur.model || "")).slice(0, 60),
+          runtime: p.runtime !== undefined
+            ? runtimeConfig.normalizeRuntime(p.runtime) || ""
+            : runtimeConfig.normalizeRuntime(cur.runtime) || "",
         };
         saveReg();
         pushRoster();
@@ -4620,11 +4629,32 @@ const server = http.createServer((req, res) => {
   } else if (req.method === "POST" && req.url === "/registry/role") {
     readBody(req, (body) => {
       try {
-        const { name, remove } = JSON.parse(body);
+        const { name, remove, profile } = JSON.parse(body);
         const n = String(name || "").trim().slice(0, 40);
         if (!n) throw new Error("no name");
-        if (remove) reg.roles = reg.roles.filter((r) => r !== n);
-        else if (!reg.roles.includes(n)) reg.roles.push(n);
+        reg.roleProfiles = reg.roleProfiles || {};
+        if (remove) {
+          reg.roles = reg.roles.filter((r) => r !== n);
+          delete reg.roleProfiles[n];
+        } else {
+          if (!reg.roles.includes(n)) reg.roles.push(n);
+          const cur = reg.roleProfiles[n] || {};
+          const incoming = profile && typeof profile === "object" ? profile : {};
+          reg.roleProfiles[n] = {
+            ...cur,
+            runtime: runtimeConfig.normalizeRuntime(
+              incoming.runtime !== undefined ? incoming.runtime : cur.runtime) || "",
+            tier: incoming.tier !== undefined
+              ? Math.min(Math.max(Number(incoming.tier) || 3, 1), 3)
+              : cur.tier,
+            skills: Array.isArray(incoming.skills)
+              ? incoming.skills.filter((s) => reg.skills[s])
+              : (cur.skills || []),
+            tools: Array.isArray(incoming.tools) ? incoming.tools : (cur.tools || []),
+            personaSeed: String(incoming.personaSeed !== undefined
+              ? incoming.personaSeed : (cur.personaSeed || "")).slice(0, 2000),
+          };
+        }
         saveReg();
         pushRoster();
         res.writeHead(200);

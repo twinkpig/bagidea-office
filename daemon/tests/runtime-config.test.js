@@ -74,3 +74,25 @@ test("runtimeLabel is stable for UI badges", () => {
   assert.strictEqual(runtimeLabel("codex"), "Codex");
   assert.strictEqual(runtimeLabel("bad"), "Claude Code");
 });
+
+test("role profile runtime works with legacy roles array", () => {
+  const reg = {
+    roles: ["Engineer"],
+    roleProfiles: { Engineer: { runtime: "codex" } },
+    agents: { kai: { role: "Engineer" } },
+  };
+  assert.strictEqual(effectiveAgentRuntime(reg, "kai"), "codex");
+});
+
+test("blank agent runtime means inherit instead of force Claude", () => {
+  const reg = {
+    defaultRuntime: "claude",
+    roleProfiles: { Engineer: { runtime: "codex" } },
+    agents: { kai: { role: "Engineer", runtime: "" } },
+  };
+  assert.deepStrictEqual(resolveAgentRuntime(reg, "kai"), {
+    runtime: "codex",
+    source: "role",
+    role: "Engineer",
+  });
+});

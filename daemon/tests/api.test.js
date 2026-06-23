@@ -40,6 +40,8 @@ test('Roster API Check', async (t) => {
     assert.ok(res.data.hasOwnProperty('agents'));
     assert.ok(res.data.agents.hasOwnProperty('main'));
     assert.ok(res.data.agents.hasOwnProperty('ceo'));
+    assert.ok(res.data.hasOwnProperty('roleProfiles'));
+    assert.ok(res.data.hasOwnProperty('defaultRuntime'));
   } catch (err) {
     if (err.code === 'ECONNREFUSED') {
       t.skip('Daemon not running at 127.0.0.1:8787');
