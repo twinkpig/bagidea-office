@@ -1224,7 +1224,7 @@
   let BUILTIN_DESC = {}, REGMCP = {}, SOUND = true, HEARTBEAT = 0;
   let DEFAULT_RUNTIME = "claude", RUNTIMES = ["claude", "codex"];
   let FEATURES = { openai: false, gemini: false, stt: false, tts: false, live: false, image: false };
-  let TTSON = true, SOCIALMIN = 60, MAXSTAFF = 18, PROPOSALMIN = 120;
+  let TTSON = true, SOCIALMIN = 60, MAXSTAFF = 18, PROPOSALMIN = 120, UPDATECHECKS = false;
   let PROJECTS_CACHE = [];
   let _plistScroll = 0, _plistQ = "";  // preserve project-list scroll + search across live refreshes
   function normRuntime(v) {
@@ -2833,6 +2833,8 @@
           <div class="knob"></div> 🗣 Agent voices — เสียงพูดของ agents (ต้องมี Gemini key)</div>
         <div class="switch" id="startupSw" style="margin-top:6px">
           <div class="knob"></div> 🚀 Start at login — เปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ</div>
+        <div class="switch ${UPDATECHECKS ? "on" : ""}" id="updSw" style="margin-top:6px">
+          <div class="knob"></div> 🔄 Update checks — แจ้งเตือนเมื่อมีเวอร์ชันใหม่</div>
         <div class="field" style="margin-top:8px"><label>💓 DIRECTOR HEARTBEAT — รอบตรวจภาพรวม/ตารางงาน (แจ้งเฉพาะที่ควรรู้)</label>
           <select id="hbSel">
             <option value="0">ปิด</option>
@@ -2990,6 +2992,12 @@
           } catch { addChip("✗ ตั้งค่าไม่สำเร็จ"); }
         };
       }
+      modalCard.querySelector("#updSw").onclick = async (e) => {
+        UPDATECHECKS = !UPDATECHECKS;
+        await api("/registry/updatechecks", { enabled: UPDATECHECKS });
+        e.currentTarget.classList.toggle("on", UPDATECHECKS);
+        document.getElementById("updBar").classList.remove("on");
+      };
       modalCard.querySelector("#sndSw").onclick = async (e) => {
         SOUND = !SOUND;
         await api("/registry/sound", { enabled: SOUND });
@@ -5233,6 +5241,7 @@
       TTSON = ev.tts !== false;
       SOCIALMIN = Number(ev.socialMin !== undefined ? ev.socialMin : 60);
       PROPOSALMIN = Number(ev.proposalMin !== undefined ? ev.proposalMin : 120);
+      UPDATECHECKS = ev.updateChecks === true;
       MAXSTAFF = Number(ev.maxStaff || 18);
       // Machine default language (registry) applies only when the user hasn't
       // pinned one in this webview. Reload once so the UI re-renders in it.
@@ -5301,6 +5310,7 @@
       return;
     }
     if (ev.type === "update.available") {
+      if (!UPDATECHECKS) return;
       const bar = document.getElementById("updBar");
       const ver = ev.version || ev.sha || "";
       document.getElementById("updSha").textContent = ver ? "v" + ver : "";

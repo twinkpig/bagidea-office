@@ -135,6 +135,9 @@ function loadReg() {
   if (reg.heartbeatMin === undefined) reg.heartbeatMin = 60; // Director check-in
   if (reg.socialMin === undefined) reg.socialMin = 120;      // agents socialize (economical default)
   if (reg.proposalMin === undefined) reg.proposalMin = 120;  // min gap between CEO pitches
+  // Local/customized installs should not self-prompt into an upstream update,
+  // because the updater can overwrite local code changes. Owners can opt in.
+  if (reg.updateChecks === undefined) reg.updateChecks = false;
   saveReg();
 }
 function saveReg() { fs.writeFileSync(REGISTRY, JSON.stringify(reg, null, 2)); }
@@ -248,6 +251,7 @@ function rosterEvt() {
     features: featuresMap(), tts: reg.tts !== false,
     socialMin: Number(reg.socialMin !== undefined ? reg.socialMin : 60),
     proposalMin: Number(reg.proposalMin !== undefined ? reg.proposalMin : 120),
+    updateChecks: reg.updateChecks === true,
     maxStaff: MAX_STAFF, staffCount: staffCount(),
     lang: reg.lang || "en", daylight: reg.daylight ?? "auto",
     monitor: reg.monitor || 0, monitors: monitorCount() };
@@ -3102,7 +3106,13 @@ function semverGt(a, b) {
 const APP_VERSION = localVersion();
 let latestVersion = APP_VERSION;   // newest seen on main (for /version + banner)
 let updateNotified = null;
+function updateChecksEnabled() {
+  const disabled = /^(1|true|yes|on)$/i.test(String(process.env.BAGIDEA_DISABLE_UPDATES || ""));
+  if (disabled) return false;
+  return reg.updateChecks === true;
+}
 function checkUpdate() {
+  if (!updateChecksEnabled()) return;
   const local = localVersion();
   require("https").get({
     host: "raw.githubusercontent.com",
@@ -4962,9 +4972,10 @@ const server = http.createServer((req, res) => {
 
   } else if (req.method === "GET" && req.url === "/version") {
     // Local vs latest-released version (the VERSION file on main).
+    const updates = updateChecksEnabled();
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ version: APP_VERSION, latest: latestVersion,
-      updateAvailable: semverGt(latestVersion, APP_VERSION) }));
+      updateChecks: updates, updateAvailable: updates && semverGt(latestVersion, APP_VERSION) }));
 
   } else if (req.method === "GET" && req.url === "/startup") {
     // Is the app set to launch with Windows? (HKCU Run key, same one the tray
@@ -5038,6 +5049,22 @@ const server = http.createServer((req, res) => {
         saveReg();
         pushRoster();
         res.writeHead(200); res.end("ok");
+      } catch { res.writeHead(400); res.end("bad json"); }
+    });
+
+  } else if (req.method === "POST" && req.url === "/registry/updatechecks") {
+    readBody(req, (body) => {
+      try {
+        reg.updateChecks = !!JSON.parse(body).enabled;
+        if (!reg.updateChecks) {
+          latestVersion = APP_VERSION;
+          updateNotified = null;
+        }
+        saveReg();
+        pushRoster();
+        if (reg.updateChecks) setTimeout(checkUpdate, 1000);
+        res.writeHead(200);
+        res.end("ok");
       } catch { res.writeHead(400); res.end("bad json"); }
     });
 
@@ -5747,6 +5774,7 @@ const server = http.createServer((req, res) => {
   } else if (req.method === "POST" && req.url === "/update") {
     // Human-triggered only (in-app 🔄 button or the CLI).
     if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
+    if (!updateChecksEnabled()) { res.writeHead(403); return res.end("updates disabled"); }
     if (process.platform === "win32") {
       const ps = path.join(__dirname, "..", "installer", "update.ps1");
       // Launch in a REAL, visible console window via `cmd start` so the user can
