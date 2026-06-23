@@ -2693,8 +2693,20 @@
         cc.innerHTML = `<div class="meta"><b>${ok ? "✅" : "⚪"} Codex runtime</b>
             <span class="pstat" style="color:${ok ? "#4ade80" : "var(--dim)"}">${esc(detail)}</span>
             <span style="font-size:10.5px;color:var(--dim)">ใช้ config/login ของ Codex เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES</span></div>
+          <div class="assistrow" style="flex:1 1 100%;margin-top:6px">
+            <label class="chk" style="margin:0;cursor:pointer"><input id="codexUseWsl" type="checkbox" ${regAll.codexUseWsl ? "checked" : ""}> WSL bridge</label>
+            <input id="codexDistro" placeholder="WSL distro (optional)" value="${esc(regAll.codexWslDistro || "")}" style="flex:1 1 130px;margin:0">
+            <button class="sparkle" id="codexCfgSave" style="flex:0 0 auto">💾</button>
+          </div>
           <div class="winbtn" data-a="retest" title="ทดสอบใหม่">🧪</div>`;
-        cc.querySelector(".winbtn").onclick = () => renderConnectTab();
+        cc.querySelector('[data-a="retest"]').onclick = () => renderConnectTab();
+        cc.querySelector("#codexCfgSave").onclick = async () => {
+          await api("/codex/config", {
+            useWsl: cc.querySelector("#codexUseWsl").checked,
+            distro: cc.querySelector("#codexDistro").value.trim(),
+          });
+          renderConnectTab();
+        };
         provbox.appendChild(cc);
       }
 

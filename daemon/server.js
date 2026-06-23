@@ -4577,6 +4577,22 @@ const server = http.createServer((req, res) => {
       }));
     });
 
+  } else if (req.method === "POST" && req.url === "/codex/config") {
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body || "{}");
+        reg.codexUseWsl = !!p.useWsl;
+        reg.codexWslDistro = String(p.distro || "").trim().slice(0, 80);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
   } else if (req.method === "POST" && req.url === "/claude/login") {
     // 🔓 Open a terminal running `claude` so the user completes browser OAuth login.
     try {
