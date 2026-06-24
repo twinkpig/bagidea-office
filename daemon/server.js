@@ -3128,6 +3128,12 @@ function updateChecksEnabled() {
   if (disabled) return false;
   return reg.updateChecks === true;
 }
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+function appleScriptString(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 function checkUpdate() {
   if (!updateChecksEnabled()) return;
   const local = localVersion();
@@ -5847,7 +5853,6 @@ const server = http.createServer((req, res) => {
   } else if (req.method === "POST" && req.url === "/update") {
     // Human-triggered only (in-app 🔄 button or the CLI).
     if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
-    if (!updateChecksEnabled()) { res.writeHead(403); return res.end("updates disabled"); }
     if (process.platform === "win32") {
       const ps = path.join(__dirname, "..", "installer", "update.ps1");
       // Launch in a REAL, visible console window via `cmd start` so the user can
@@ -5857,14 +5862,16 @@ const server = http.createServer((req, res) => {
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps],
         { detached: true, stdio: "ignore", windowsHide: false }).unref();
     } else if (process.platform === "darwin") {
-      // macOS: git pull + rebuild in a visible Terminal window
+      // macOS: run the full updater in a visible Terminal window.
       const root = path.join(__dirname, "..");
-      const script = `tell application "Terminal" to do script "cd '${root}' && git pull && ./build-mac.sh"`;
+      const sh = path.join(root, "installer", "update-mac.sh");
+      const cmd = `cd ${shellQuote(root)} && bash ${shellQuote(sh)}`;
+      const script = `tell application "Terminal" to do script "${appleScriptString(cmd)}"`;
       spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" }).unref();
     } else {
       // Linux: same idea, x-terminal-emulator
       const root = path.join(__dirname, "..");
-      spawn("x-terminal-emulator", ["-e", `cd '${root}' && git pull && bash build-mac.sh`],
+      spawn("x-terminal-emulator", ["-e", `cd ${shellQuote(root)} && git pull && bash build-mac.sh`],
         { detached: true, stdio: "ignore" }).unref();
     }
     res.writeHead(200); res.end("ok");

@@ -86,8 +86,11 @@ func _force_opaque_window() -> void:
 		win.transparent = false
 	DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
 
+func _interactive_office_window() -> bool:
+	return (_wallpaper_mode and OS.get_name() == "Windows") or _office_window_mode
+
 func _build_window_controls() -> void:
-	if not (_wallpaper_mode and OS.get_name() == "Windows"):
+	if not _interactive_office_window():
 		return
 	if get_node_or_null("WindowControls"):
 		return
@@ -238,7 +241,7 @@ func _update_weather_controls() -> void:
 		_weather_button.text = "Weather: " + _weather_label(_weather_name)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not (_wallpaper_mode and OS.get_name() == "Windows"):
+	if not _interactive_office_window():
 		return
 	var rig := get_node_or_null("CameraRig")
 	if rig == null:

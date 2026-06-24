@@ -352,6 +352,48 @@ fn post_restart() {
     let _ = hidden(&mut c).spawn();
 }
 
+/// Ask the daemon to run the visible updater. This is manual and still works
+/// when background update checks are disabled.
+fn post_update() {
+    let mut c = Command::new("curl");
+    c.args([
+        "-s",
+        "-X",
+        "POST",
+        "http://127.0.0.1:8787/update",
+        "-H",
+        "x-bagidea-ui: 1",
+    ]);
+    let _ = hidden(&mut c).spawn();
+}
+
+/// Toggle background update checks in the daemon registry.
+fn post_update_checks(enabled: bool) {
+    let mut c = Command::new("curl");
+    c.args([
+        "-s",
+        "-X",
+        "POST",
+        "http://127.0.0.1:8787/registry/updatechecks",
+        "-H",
+        "content-type: application/json",
+        "-d",
+        &format!("{{\"enabled\":{}}}", enabled),
+    ]);
+    let _ = hidden(&mut c).spawn();
+}
+
+fn update_checks_enabled() -> bool {
+    let mut c = Command::new("curl");
+    c.args(["-s", "http://127.0.0.1:8787/version"]);
+    match hidden(&mut c).output() {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).contains("\"updateChecks\":true")
+        }
+        _ => false,
+    }
+}
+
 /// Debug beacon: stages of the hotkey chain reported to the daemon.
 fn ptt_beacon(stage: &str) {
     let body = format!(r#"{{"type":"ui.ptt","stage":"{}"}}"#, stage);
@@ -2111,6 +2153,9 @@ fn main() {
     let office_item = MenuItem::new("Open Office Window", true, None);
     let hide_item = CheckMenuItem::new("Hide office (agents keep working)", true, false, None);
     let restart_item = MenuItem::new("Restart office", true, None);
+    let update_item = MenuItem::new("Update office now", true, None);
+    let update_checks_item =
+        CheckMenuItem::new("Check for updates", true, update_checks_enabled(), None);
     let autostart_item = CheckMenuItem::new(
         platform::AUTOSTART_LABEL,
         true,
@@ -2123,6 +2168,8 @@ fn main() {
         &office_item,
         &hide_item,
         &restart_item,
+        &update_item,
+        &update_checks_item,
         &autostart_item,
         &PredefinedMenuItem::separator(),
         &exit_item,
@@ -2137,6 +2184,8 @@ fn main() {
     let office_id = office_item.id().clone();
     let hide_id = hide_item.id().clone();
     let restart_id = restart_item.id().clone();
+    let update_id = update_item.id().clone();
+    let update_checks_id = update_checks_item.id().clone();
     let autostart_id = autostart_item.id().clone();
     let exit_id = exit_item.id().clone();
 
@@ -2367,6 +2416,10 @@ fn main() {
             } else if ev.id == restart_id {
                 // The daemon does a detached relaunch that outlives us being killed.
                 post_restart();
+            } else if ev.id == update_id {
+                post_update();
+            } else if ev.id == update_checks_id {
+                post_update_checks(update_checks_item.is_checked());
             } else if ev.id == autostart_id {
                 platform::set_autostart(autostart_item.is_checked());
             }
@@ -2450,7 +2503,13 @@ fn main() {
                         &overlay,
                         w,
                         h,
-                        if overlay_fullscreen { 0.0 } else if feed { 14.0 } else { 18.0 },
+                        if overlay_fullscreen {
+                            0.0
+                        } else if feed {
+                            14.0
+                        } else {
+                            18.0
+                        },
                     );
                 } else if window_id == orb_id {
                     // Re-clip the orb to its circle on any DPI / monitor change so the
@@ -2493,8 +2552,9 @@ fn main() {
                 UserEvent::MiniToggle => {
                     if !feed {
                         overlay_fullscreen = false;
-                        let _ = overlay_view
-                            .evaluate_script("window.setFullscreenMode && setFullscreenMode(false)");
+                        let _ = overlay_view.evaluate_script(
+                            "window.setFullscreenMode && setFullscreenMode(false)",
+                        );
                         mini = !mini;
                         let (w, h) = if mini { MINI } else { FULL };
                         overlay.set_inner_size(LogicalSize::new(w, h));
