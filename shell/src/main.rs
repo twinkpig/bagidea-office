@@ -1285,20 +1285,13 @@ mod platform {
     }
 
     pub fn office_args(c: &mut Command, root: &PathBuf, _cx: i32, _cy: i32) {
-        // Stage A: a normal windowed office (the desktop-level embed comes from
-        // the DYLD shim in a follow-up). Still passes --wallpaper so the world
-        // reports ready the same way.
+        // macOS uses a normal resizable office window. The desktop-level
+        // wallpaper shim is intentionally not injected here; users can still
+        // open the office from the tray/menu, but it behaves like the Windows
+        // fallback window instead of sitting behind desktop icons.
         c.args(["--path"])
             .arg(root.join("godot"))
-            .args(["--", "--wallpaper"]);
-        // If a built shim is present, inject it so Godot drops to desktop level.
-        let shim = root
-            .join("shell")
-            .join("macos")
-            .join("libwallpaper_shim.dylib");
-        if shim.exists() {
-            c.env("DYLD_INSERT_LIBRARIES", shim);
-        }
+            .args(["--", "--office-window"]);
     }
 
     pub fn ensure_single_instance() -> bool {

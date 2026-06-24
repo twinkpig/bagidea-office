@@ -39,6 +39,7 @@ var _weather_offset := 0
 var _weather_name := ""
 
 var _wallpaper_mode := false
+var _office_window_mode := false
 var _occ_check_timer := 0.0
 var _occluded := false
 var _fps_log_timer := 0.0
@@ -273,6 +274,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _ready() -> void:
 	_wallpaper_mode = "--wallpaper" in OS.get_cmdline_user_args()
+	_office_window_mode = "--office-window" in OS.get_cmdline_user_args()
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--hour="):
 			_hour_override = float(arg.split("=")[1])
@@ -437,8 +439,8 @@ func apply_weather_event(evt: Dictionary) -> void:
 func _opaque_after_first_frame() -> void:
 	await RenderingServer.frame_post_draw
 	_force_opaque_window()
-	if "--wallpaper" in OS.get_cmdline_user_args():
-		if OS.get_name() == "Windows":
+	if _wallpaper_mode or _office_window_mode:
+		if OS.get_name() == "Windows" or _office_window_mode:
 			DisplayServer.window_set_title("BagIdea Office")
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 			DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
