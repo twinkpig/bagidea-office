@@ -19,5 +19,5 @@ else
   echo "[run-mac] daemon already running on :8787"
 fi
 
-echo "[run-mac] launching office… (pass --shot for a one-off screenshot to shots/)"
-exec "$GODOT" --path "$ROOT/godot" "$@"
+echo "[run-mac] launching office window… (pass --shot for a one-off screenshot to shots/)"
+exec "$GODOT" --path "$ROOT/godot" -- --office-window "$@"
