@@ -45,13 +45,13 @@ adjustment_contrast = 1.08
 adjustment_saturation = 1.22
 
 [sub_resource type="CameraAttributesPractical" id="dof"]
-dof_blur_far_enabled = true
+dof_blur_far_enabled = false
 dof_blur_far_distance = 32.0
 dof_blur_far_transition = 10.0
-dof_blur_near_enabled = true
+dof_blur_near_enabled = false
 dof_blur_near_distance = 12.0
 dof_blur_near_transition = 6.0
-dof_blur_amount = 0.05
+dof_blur_amount = 0.0
 
 [sub_resource type="ShaderMaterial" id="grain_mat"]
 shader = ExtResource("6")
@@ -104,6 +104,7 @@ script = ExtResource("5")
 script = ExtResource("7")
 
 [node name="CinemaLayer" type="CanvasLayer" parent="."]
+visible = false
 
 [node name="Cinema" type="ColorRect" parent="CinemaLayer"]
 material = SubResource("cinema_mat")
@@ -115,6 +116,7 @@ grow_vertical = 2
 mouse_filter = 2
 
 [node name="GrainLayer" type="CanvasLayer" parent="."]
+visible = false
 
 [node name="Grain" type="ColorRect" parent="GrainLayer"]
 material = SubResource("grain_mat")

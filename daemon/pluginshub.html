@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -56,7 +56,7 @@
 <div id="toast"></div>
 <script src="/winlang.js"></script>
 <script>
-  let L = "th";
+  let L = "en";
   let WL = null;  // WinLang instance for non-English languages (Thai → lang via /i18n)
   const UI = {
     th: {
@@ -174,7 +174,7 @@
       fetch("/plugins").then((r) => r.json()).catch(() => ({ plugins: [] })),
       fetch("/plugins/catalog").then((r) => r.json()).catch(() => ({ plugins: [] })),
     ]).then(async ([reg, plg, cat]) => {
-      const lang = reg.lang || "th";
+      const lang = reg.lang || "en";
       if (lang !== "th") L = lang;
       installed = {};
       for (const p of (plg.plugins || [])) installed[p.id] = { core: !!p.core };
@@ -270,7 +270,7 @@
     } catch { setTimeout(wireSync, 4000); }
   }
   wireSync();
-  intro(); refresh();
+  refresh();
 </script>
 </body>
 </html>

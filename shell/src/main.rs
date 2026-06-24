@@ -30,9 +30,9 @@ use tray_icon::{
     TrayIconBuilder, TrayIconEvent,
 };
 
-const ORB_SIZE: f64 = 78.0;  // window; the orb art is inset ~3px so a thin transparent
-                             // halo sits between the glow and the circular clip edge — the
-                             // clip then cuts empty space, not the glow against the wallpaper.
+const ORB_SIZE: f64 = 39.0; // window; the orb art is inset so a thin transparent
+                            // halo sits between the glow and the circular clip edge — the
+                            // clip then cuts empty space, not the glow against the wallpaper.
 const FULL: (f64, f64) = (560.0, 700.0);
 const MINI: (f64, f64) = (390.0, 430.0);
 const FEED_W: f64 = 330.0;
@@ -46,17 +46,18 @@ enum UserEvent {
     DragOverlay,
     HideOverlay,
     MiniToggle,
+    FullscreenToggle,
     FeedToggle,
     SetHotkey(String),
     PttKey(bool), // global voice hotkey: true = pressed, false = released
     WorldReady,
-    EditorOpening, // show the logo splash + launch the 3D editor tiny behind it
-    EditorReady,   // the editor window is on screen → drop the splash
+    EditorOpening,      // show the logo splash + launch the 3D editor tiny behind it
+    EditorReady,        // the editor window is on screen → drop the splash
     OpenWindow(String), // pop a custom-chrome window onto a daemon URL (plugin / viewer)
-    PopupDrag(tao::window::WindowId),  // a pop-out's title bar is being dragged
+    PopupDrag(tao::window::WindowId), // a pop-out's title bar is being dragged
     PopupClose(tao::window::WindowId), // a pop-out asked to close itself
-    PopupMin(tao::window::WindowId),   // minimize (พัก)
-    PopupMax(tao::window::WindowId),   // toggle maximize / restore
+    PopupMin(tao::window::WindowId), // minimize (พัก)
+    PopupMax(tao::window::WindowId), // toggle maximize / restore
 }
 
 // Run a child process without flashing a console window (Windows); a no-op
@@ -90,7 +91,7 @@ const ORB_HTML: &str = r#"<!doctype html>
      (CSS rounded/conic divs went black here). object-fit:contain keeps each a true circle. */
   /* inset leaves a thin transparent halo so the window's circular clip edge falls on
      empty space, not on the glowing rim (which looked jagged against the wallpaper). */
-  img { position:absolute; inset:3px; width:calc(100% - 6px); height:calc(100% - 6px); object-fit:contain; }
+  img { position:absolute; inset:2px; width:calc(100% - 4px); height:calc(100% - 4px); object-fit:contain; }
   #ring { animation: spin 4s linear infinite, flicker 3.4s ease-in-out infinite; will-change:transform,opacity; }
   #logo { animation: breathe 3.6s ease-in-out infinite; will-change:transform; }
   body.busy #ring { animation-duration: 1.6s, 1.5s; }   /* working = the loop swirls faster */
@@ -165,8 +166,12 @@ fn logo_data_uri() -> String {
     const LOGO: &[u8] = include_bytes!("../../logo_ico_cute.png");
     format!("data:image/png;base64,{}", base64_encode(LOGO))
 }
-fn orb_html() -> String { ORB_HTML.replace("__LOGO__", &logo_data_uri()) }
-fn splash_html() -> String { SPLASH_HTML.replace("__LOGO__", &logo_data_uri()) }
+fn orb_html() -> String {
+    ORB_HTML.replace("__LOGO__", &logo_data_uri())
+}
+fn splash_html() -> String {
+    SPLASH_HTML.replace("__LOGO__", &logo_data_uri())
+}
 
 fn base64_encode(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -177,8 +182,16 @@ fn base64_encode(data: &[u8]) -> String {
             | (*chunk.get(2).unwrap_or(&0) as u32);
         out.push(T[((n >> 18) & 63) as usize] as char);
         out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -217,13 +230,17 @@ fn spawn_daemon(root: &PathBuf) -> Option<Child> {
     // log to read. Fall back to /dev/null-equivalent if the file can't open.
     use std::process::Stdio;
     match std::fs::File::create(root.join("daemon").join("daemon.log")) {
-        Ok(f) => {
-            match f.try_clone() {
-                Ok(f2) => { c.stdout(Stdio::from(f)).stderr(Stdio::from(f2)); }
-                Err(_) => { c.stdout(Stdio::from(f)).stderr(Stdio::null()); }
+        Ok(f) => match f.try_clone() {
+            Ok(f2) => {
+                c.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
             }
+            Err(_) => {
+                c.stdout(Stdio::from(f)).stderr(Stdio::null());
+            }
+        },
+        Err(_) => {
+            c.stdout(Stdio::null()).stderr(Stdio::null());
         }
-        Err(_) => { c.stdout(Stdio::null()).stderr(Stdio::null()); }
     }
     hidden(&mut c).spawn().ok()
 }
@@ -271,7 +288,9 @@ fn watch_editor_requests(proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
                         .and_then(|x| x.modified())
                         .map(|t| t >= start)
                         .unwrap_or(false);
-                    if fresh || start.elapsed().unwrap_or_default() > std::time::Duration::from_secs(60) {
+                    if fresh
+                        || start.elapsed().unwrap_or_default() > std::time::Duration::from_secs(60)
+                    {
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
@@ -286,9 +305,16 @@ fn watch_editor_requests(proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
 /// Fire-and-forget visibility event to the daemon (curl ships with both OSes).
 fn post_visibility(on: bool) {
     let mut c = Command::new("curl");
-    c.args(["-s", "-X", "POST", "http://127.0.0.1:8787/event",
-        "-H", "content-type: application/json",
-        "-d", &format!("{{\"type\":\"ui.visibility\",\"on\":{}}}", on)]);
+    c.args([
+        "-s",
+        "-X",
+        "POST",
+        "http://127.0.0.1:8787/event",
+        "-H",
+        "content-type: application/json",
+        "-d",
+        &format!("{{\"type\":\"ui.visibility\",\"on\":{}}}", on),
+    ]);
     let _ = hidden(&mut c).spawn();
 }
 
@@ -296,9 +322,16 @@ fn post_visibility(on: bool) {
 /// picker only on multi-monitor (and with the right count). Fire-and-forget.
 fn post_monitor_count(count: usize) {
     let mut c = Command::new("curl");
-    c.args(["-s", "-X", "POST", "http://127.0.0.1:8787/ui/monitors",
-        "-H", "content-type: application/json",
-        "-d", &format!("{{\"count\":{}}}", count)]);
+    c.args([
+        "-s",
+        "-X",
+        "POST",
+        "http://127.0.0.1:8787/ui/monitors",
+        "-H",
+        "content-type: application/json",
+        "-d",
+        &format!("{{\"count\":{}}}", count),
+    ]);
     let _ = hidden(&mut c).spawn();
 }
 
@@ -306,8 +339,16 @@ fn post_monitor_count(count: usize) {
 /// survives killing us). Used by the tray "Restart office" item.
 fn post_restart() {
     let mut c = Command::new("curl");
-    c.args(["-s", "-X", "POST", "http://127.0.0.1:8787/ui/restart",
-        "-H", "content-type: application/json", "-H", "x-bagidea-ui: 1"]);
+    c.args([
+        "-s",
+        "-X",
+        "POST",
+        "http://127.0.0.1:8787/ui/restart",
+        "-H",
+        "content-type: application/json",
+        "-H",
+        "x-bagidea-ui: 1",
+    ]);
     let _ = hidden(&mut c).spawn();
 }
 
@@ -315,8 +356,16 @@ fn post_restart() {
 fn ptt_beacon(stage: &str) {
     let body = format!(r#"{{"type":"ui.ptt","stage":"{}"}}"#, stage);
     let mut c = Command::new("curl");
-    c.args(["-s", "-X", "POST", "http://127.0.0.1:8787/event",
-        "-H", "content-type: application/json", "-d", &body]);
+    c.args([
+        "-s",
+        "-X",
+        "POST",
+        "http://127.0.0.1:8787/event",
+        "-H",
+        "content-type: application/json",
+        "-d",
+        &body,
+    ]);
     let _ = hidden(&mut c).spawn();
 }
 
@@ -353,11 +402,13 @@ mod platform {
         CreateEllipticRgn, CreateRectRgn, CreateRoundRectRgn, SetWindowRgn,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, FindWindowExW, FindWindowW, GetWindowLongW, GetWindowThreadProcessId,
-        IsWindowVisible, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
-        SetWindowLongW, ShowWindow, SystemParametersInfoW, GWL_EXSTYLE, LWA_ALPHA,
-        SMTO_NORMAL, SPI_SETDESKWALLPAPER, SW_HIDE, SW_SHOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW,
+        EnumChildWindows, EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetParent,
+        GetWindowLongW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent, SetWindowLongW, SetWindowPos,
+        ShowWindow, SystemParametersInfoW, GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA, SMTO_NORMAL,
+        SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SW_HIDE, SW_SHOW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_POPUP,
     };
 
     static PTT_THREAD_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -368,7 +419,8 @@ mod platform {
     static PTT_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     // True while the user has hidden the office from the tray — the re-pin
     // watcher (issue #7) must NOT fight that by re-showing the window.
-    static WALLPAPER_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static WALLPAPER_HIDDEN: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
     static PTT_PROXY: std::sync::Mutex<Option<tao::event_loop::EventLoopProxy<super::UserEvent>>> =
         std::sync::Mutex::new(None);
 
@@ -405,7 +457,9 @@ mod platform {
         }
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
     }
-    fn lparam_is_null(l: isize) -> bool { l == 0 }
+    fn lparam_is_null(l: isize) -> bool {
+        l == 0
+    }
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -423,8 +477,8 @@ mod platform {
                 // the distinct left/right vkCodes, so Right Ctrl matches only the
                 // right key). Right Ctrl is the recommended default — rarely typed.
                 "rctrl" | "rightctrl" | "right ctrl" => vk = Some(0xA3), // VK_RCONTROL
-                "ralt" | "rightalt" | "right alt" => vk = Some(0xA5),   // VK_RMENU
-                "rshift" | "rightshift" => vk = Some(0xA1),             // VK_RSHIFT
+                "ralt" | "rightalt" | "right alt" => vk = Some(0xA5),    // VK_RMENU
+                "rshift" | "rightshift" => vk = Some(0xA1),              // VK_RSHIFT
                 "space" => vk = Some(0x20u32),
                 "f5" => vk = Some(0x74),
                 "f6" => vk = Some(0x75),
@@ -474,14 +528,16 @@ mod platform {
             PTT_VK.store(v, std::sync::atomic::Ordering::SeqCst);
         }
         // The C hook callback reaches the event loop through this static.
-        if let Ok(mut g) = PTT_PROXY.lock() { *g = Some(proxy); }
+        if let Ok(mut g) = PTT_PROXY.lock() {
+            *g = Some(proxy);
+        }
         std::thread::spawn(move || unsafe {
             use std::sync::atomic::Ordering;
             use windows_sys::Win32::System::Threading::GetCurrentThreadId;
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                GetMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, MSG,
-                WH_KEYBOARD_LL, WM_APP, WM_TIMER,
+                GetMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, MSG, WH_KEYBOARD_LL,
+                WM_APP, WM_TIMER,
             };
             PTT_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
             // A low-level keyboard hook delivers BOTH key-down and key-up, which
@@ -489,7 +545,11 @@ mod platform {
             // press-to-stop toggle). The hook callback is dispatched on the
             // thread that installed it, so we must keep pumping messages here.
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_kbd), std::ptr::null_mut(), 0);
-            ptt_beacon(if hook.is_null() { "register-FAILED" } else { "registered" });
+            ptt_beacon(if hook.is_null() {
+                "register-FAILED"
+            } else {
+                "registered"
+            });
             // Self-healing watchdog: the LL hook can miss a key event when focus
             // changes around the moment of a press (the reported "hold the hotkey
             // and nothing happens, then it works after clicking elsewhere"). A
@@ -548,7 +608,10 @@ mod platform {
         }
     }
 
-    unsafe extern "system" fn find_workerw_cb(top: HWND, out: windows_sys::Win32::Foundation::LPARAM) -> i32 {
+    unsafe extern "system" fn find_workerw_cb(
+        top: HWND,
+        out: windows_sys::Win32::Foundation::LPARAM,
+    ) -> i32 {
         let shell_class = wide("SHELLDLL_DefView");
         let shell = FindWindowExW(top, 0 as HWND, shell_class.as_ptr(), std::ptr::null());
         if shell != 0 as HWND {
@@ -566,7 +629,22 @@ mod platform {
         hwnd: HWND,
     }
 
-    unsafe extern "system" fn find_by_pid_cb(h: HWND, lp: windows_sys::Win32::Foundation::LPARAM) -> i32 {
+    unsafe fn hwnd_class(h: HWND) -> String {
+        let mut buf = [0u16; 96];
+        let n = GetClassNameW(h, buf.as_mut_ptr(), buf.len() as i32);
+        String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    }
+
+    unsafe fn hwnd_title(h: HWND) -> String {
+        let mut buf = [0u16; 160];
+        let n = GetWindowTextW(h, buf.as_mut_ptr(), buf.len() as i32);
+        String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    }
+
+    unsafe extern "system" fn find_by_pid_cb(
+        h: HWND,
+        lp: windows_sys::Win32::Foundation::LPARAM,
+    ) -> i32 {
         let data = &mut *(lp as *mut FindByPid);
         let mut pid = 0u32;
         GetWindowThreadProcessId(h, &mut pid);
@@ -577,19 +655,132 @@ mod platform {
         1
     }
 
-    fn find_wallpaper_hwnd(pid: u32) -> HWND {
+    unsafe extern "system" fn find_godot_window_cb(
+        h: HWND,
+        lp: windows_sys::Win32::Foundation::LPARAM,
+    ) -> i32 {
+        let data = &mut *(lp as *mut FindByPid);
+        if data.hwnd != 0 as HWND {
+            return 0;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, &mut pid);
+        if pid == data.pid && IsWindowVisible(h) != 0 {
+            let class = hwnd_class(h);
+            let title = hwnd_title(h);
+            if class == "Engine" || title.contains("BagIdea Office") {
+                data.hwnd = h;
+                return 0;
+            }
+        }
+        EnumChildWindows(h, Some(find_godot_window_cb), lp);
+        if data.hwnd != 0 as HWND {
+            0
+        } else {
+            1
+        }
+    }
+
+    fn find_godot_window(pid: u32) -> HWND {
+        unsafe {
+            let mut find = FindByPid {
+                pid,
+                hwnd: 0 as HWND,
+            };
+            EnumWindows(Some(find_godot_window_cb), &mut find as *mut FindByPid as _);
+            find.hwnd
+        }
+    }
+
+    fn desktop_parent_hwnd() -> HWND {
         unsafe {
             let progman_class = wide("Progman");
             let progman = FindWindowW(progman_class.as_ptr(), std::ptr::null());
+            if progman != 0 as HWND {
+                let mut result: usize = 0;
+                SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &mut result);
+            }
             let mut workerw: HWND = 0 as HWND;
             EnumWindows(Some(find_workerw_cb), &mut workerw as *mut HWND as _);
-            if workerw == 0 as HWND {
-                let worker_class = wide("WorkerW");
-                workerw = FindWindowExW(progman, 0 as HWND, worker_class.as_ptr(), std::ptr::null());
-                if workerw == 0 as HWND {
-                    workerw = progman;
+            if workerw != 0 as HWND {
+                return workerw;
+            }
+
+            if progman != 0 as HWND {
+                let shell_class = wide("SHELLDLL_DefView");
+                let shell =
+                    FindWindowExW(progman, 0 as HWND, shell_class.as_ptr(), std::ptr::null());
+                if shell != 0 as HWND {
+                    return shell;
                 }
             }
+            progman
+        }
+    }
+
+    fn pin_wallpaper_window(godot: HWND, root: &std::path::Path) {
+        unsafe {
+            let parent = desktop_parent_hwnd();
+            if parent == 0 as HWND {
+                return;
+            }
+            let style = GetWindowLongW(godot, GWL_STYLE) as u32;
+            SetWindowLongW(godot, GWL_STYLE, ((style | WS_CHILD) & !WS_POPUP) as i32);
+            SetWindowPos(
+                godot,
+                0 as HWND,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
+            SetParent(godot, parent);
+            if !WALLPAPER_HIDDEN.load(std::sync::atomic::Ordering::SeqCst) {
+                ShowWindow(godot, SW_SHOW);
+            }
+            SetWindowPos(
+                godot,
+                1 as HWND,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
+            let count = enum_monitors().len().max(1);
+            let _ = std::fs::write(root.join("daemon").join("monitors.txt"), count.to_string());
+            super::post_monitor_count(count);
+            if count > 1 {
+                position_wallpaper(godot, root);
+            }
+        }
+    }
+
+    fn spawn_wallpaper_repin_watcher(pid: u32, root: PathBuf) {
+        std::thread::spawn(move || {
+            for _ in 0..7200 {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if WALLPAPER_HIDDEN.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
+                let godot = find_godot_window(pid);
+                if godot == 0 as HWND {
+                    continue;
+                }
+                unsafe {
+                    let parent = desktop_parent_hwnd();
+                    if parent != 0 as HWND && GetParent(godot) != parent {
+                        pin_wallpaper_window(godot, &root);
+                    }
+                }
+            }
+        });
+    }
+
+    fn find_wallpaper_hwnd(pid: u32) -> HWND {
+        unsafe {
+            let workerw = desktop_parent_hwnd();
             let mut child = FindWindowExW(workerw, 0 as HWND, std::ptr::null(), std::ptr::null());
             while child != 0 as HWND {
                 let mut wpid = 0u32;
@@ -599,7 +790,7 @@ mod platform {
                 }
                 child = FindWindowExW(workerw, child, std::ptr::null(), std::ptr::null());
             }
-            0 as HWND
+            find_godot_window(pid)
         }
     }
 
@@ -618,19 +809,32 @@ mod platform {
             use windows_sys::Win32::Graphics::Gdi::{
                 EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
             };
-            struct Mons { v: Vec<(i32, i32, i32, i32, bool)> }
+            struct Mons {
+                v: Vec<(i32, i32, i32, i32, bool)>,
+            }
             unsafe extern "system" fn cb(h: HMONITOR, _dc: HDC, _r: *mut RECT, lp: LPARAM) -> i32 {
                 let m = &mut *(lp as *mut Mons);
                 let mut mi: MONITORINFO = std::mem::zeroed();
                 mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
                 if GetMonitorInfoW(h, &mut mi) != 0 {
                     let r = mi.rcMonitor;
-                    m.v.push((r.left, r.top, r.right - r.left, r.bottom - r.top, mi.dwFlags & 1 != 0));
+                    m.v.push((
+                        r.left,
+                        r.top,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                        mi.dwFlags & 1 != 0,
+                    ));
                 }
                 1
             }
             let mut mons = Mons { v: Vec::new() };
-            EnumDisplayMonitors(0 as HDC, std::ptr::null(), Some(cb), &mut mons as *mut Mons as LPARAM);
+            EnumDisplayMonitors(
+                0 as HDC,
+                std::ptr::null(),
+                Some(cb),
+                &mut mons as *mut Mons as LPARAM,
+            );
             mons.v.sort_by_key(|m| !m.4); // primary first → index 0 is always primary
             mons.v
         }
@@ -648,7 +852,11 @@ mod platform {
             let idx = std::fs::read_to_string(root.join("daemon").join("monitor.txt"))
                 .ok()
                 .and_then(|s| s.trim().parse::<usize>().ok())
-                .or_else(|| std::env::var("BAGIDEA_MONITOR").ok().and_then(|s| s.trim().parse::<usize>().ok()))
+                .or_else(|| {
+                    std::env::var("BAGIDEA_MONITOR")
+                        .ok()
+                        .and_then(|s| s.trim().parse::<usize>().ok())
+                })
                 .unwrap_or(0);
             let vsx = GetSystemMetrics(SM_XVIRTUALSCREEN);
             let vsy = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -656,33 +864,23 @@ mod platform {
                 .get(idx)
                 .or_else(|| mons.first())
                 .map(|&(l, t, w, h, _)| (l, t, w, h))
-                .unwrap_or((0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)));
+                .unwrap_or((
+                    0,
+                    0,
+                    GetSystemMetrics(SM_CXSCREEN),
+                    GetSystemMetrics(SM_CYSCREEN),
+                ));
             // WorkerW client origin = virtual-screen origin → subtract it.
             MoveWindow(godot, left - vsx, top - vsy, w, h, 1);
         }
     }
 
-    pub fn attach_wallpaper_when_ready(pid: u32, root: PathBuf, proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
+    pub fn attach_wallpaper_when_ready(
+        _pid: u32,
+        _root: PathBuf,
+        proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    ) {
         std::thread::spawn(move || unsafe {
-            let mut find = FindByPid { pid, hwnd: 0 as HWND };
-            for _ in 0..240 {
-                EnumWindows(Some(find_by_pid_cb), &mut find as *mut FindByPid as _);
-                if find.hwnd != 0 as HWND {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            let godot = find.hwnd;
-            if godot == 0 as HWND {
-                let _ = proxy.send_event(UserEvent::WorldReady);
-                return;
-            }
-            SetWindowRgn(godot as _, CreateRectRgn(0, 0, 0, 0), 1);
-            ShowWindow(godot, SW_HIDE);
-            let ex = GetWindowLongW(godot, GWL_EXSTYLE) as u32;
-            SetWindowLongW(godot, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) as i32);
-            ShowWindow(godot, SW_SHOW);
-
             let started = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
             let flag = std::env::temp_dir().join("bagidea_world_ready");
             for _ in 0..120 {
@@ -695,36 +893,6 @@ mod platform {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            SetWindowRgn(godot as _, 0 as _, 1);
-
-            let progman_class = wide("Progman");
-            let progman = FindWindowW(progman_class.as_ptr(), std::ptr::null());
-            let mut result: usize = 0;
-            SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &mut result);
-            let mut workerw: HWND = 0 as HWND;
-            EnumWindows(Some(find_workerw_cb), &mut workerw as *mut HWND as _);
-            if workerw == 0 as HWND {
-                let worker_class = wide("WorkerW");
-                workerw = FindWindowExW(progman, 0 as HWND, worker_class.as_ptr(), std::ptr::null());
-                if workerw == 0 as HWND {
-                    workerw = progman;
-                }
-            }
-            SetParent(godot, workerw);
-            // Detect how many monitors there really are and tell the daemon, so the
-            // UI shows a display picker ONLY on multi-monitor (and lists the right
-            // count). Writing monitors.txt also lets the daemon report it on connect.
-            let count = enum_monitors().len().max(1);
-            let _ = std::fs::write(root.join("daemon").join("monitors.txt"), count.to_string());
-            super::post_monitor_count(count);
-            // Single monitor → leave the embed ALONE (the original rock-solid path
-            // that survives Win+D / desktop clicks; no MoveWindow, no watcher).
-            // Multi-monitor → place it on the chosen screen (default = primary), a
-            // ONE-TIME position so a fresh multi-monitor setup just works on boot.
-            if count > 1 {
-                position_wallpaper(godot, &root);
-            }
             let _ = proxy.send_event(UserEvent::WorldReady);
         });
     }
@@ -734,7 +902,9 @@ mod platform {
         WALLPAPER_HIDDEN.store(hidden, std::sync::atomic::Ordering::SeqCst);
         let g = find_wallpaper_hwnd(pid);
         if g != 0 as HWND {
-            unsafe { ShowWindow(g, if hidden { SW_HIDE } else { SW_SHOW }); }
+            unsafe {
+                ShowWindow(g, if hidden { SW_HIDE } else { SW_SHOW });
+            }
         }
     }
 
@@ -743,11 +913,18 @@ mod platform {
         if pid == 0 {
             return false;
         }
-        let mut find = FindByPid { pid, hwnd: 0 as HWND };
-        unsafe { EnumWindows(Some(find_by_pid_cb), &mut find as *mut FindByPid as _); }
+        let mut find = FindByPid {
+            pid,
+            hwnd: 0 as HWND,
+        };
+        unsafe {
+            EnumWindows(Some(find_by_pid_cb), &mut find as *mut FindByPid as _);
+        }
         if find.hwnd != 0 as HWND {
             unsafe {
-                use windows_sys::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    SetForegroundWindow, ShowWindow, SW_RESTORE,
+                };
                 ShowWindow(find.hwnd, SW_RESTORE);
                 SetForegroundWindow(find.hwnd);
             }
@@ -776,8 +953,15 @@ mod platform {
             SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         };
         unsafe {
-            SetWindowPos(window.hwnd() as HWND, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(
+                window.hwnd() as HWND,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -794,9 +978,15 @@ mod platform {
         };
         // Make the ENTIRE window client area — no non-client band at all, so Windows/DWM
         // has nowhere to draw the caption bar, its icon, or the min/close buttons.
-        if msg == WM_NCCALCSIZE && wp != 0 { return 0; }
-        if msg == WM_NCPAINT { return 0; }            // never paint a caption/frame
-        if msg == WM_NCACTIVATE { return 1; }         // keep NC state, no redraw flash
+        if msg == WM_NCCALCSIZE && wp != 0 {
+            return 0;
+        }
+        if msg == WM_NCPAINT {
+            return 0;
+        } // never paint a caption/frame
+        if msg == WM_NCACTIVATE {
+            return 1;
+        } // keep NC state, no redraw flash
         let prev: isize = ORB_PREV_PROC.load(Ordering::SeqCst);
         let f: windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC = std::mem::transmute(prev);
         CallWindowProcW(f, hwnd, msg, wp, lp)
@@ -804,9 +994,9 @@ mod platform {
     pub fn suppress_nc(window: &Window) {
         use std::sync::atomic::Ordering;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowLongPtrW, SetWindowPos, GWL_STYLE, GWLP_WNDPROC, SWP_FRAMECHANGED,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
+            SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC, GWL_STYLE, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+            WS_SYSMENU,
         };
         unsafe {
             let hwnd = window.hwnd() as HWND;
@@ -816,13 +1006,23 @@ mod platform {
             // composition is untouched (removing those made a white frame show). The proc
             // below (WM_NCCALCSIZE→0) then removes the caption band itself.
             let st = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-            SetWindowLongW(hwnd, GWL_STYLE,
-                (st & !(WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) as i32);
+            SetWindowLongW(
+                hwnd,
+                GWL_STYLE,
+                (st & !(WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) as i32,
+            );
             let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, orb_proc as isize);
             ORB_PREV_PROC.store(prev, Ordering::SeqCst);
             // Force a frame recompute so the style change + WM_NCCALCSIZE take effect.
-            SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -830,9 +1030,12 @@ mod platform {
         let sf = window.scale_factor();
         unsafe {
             let rgn = CreateRoundRectRgn(
-                0, 0,
-                (w * sf) as i32 + 1, (h * sf) as i32 + 1,
-                (radius * sf) as i32, (radius * sf) as i32,
+                0,
+                0,
+                (w * sf) as i32 + 1,
+                (h * sf) as i32 + 1,
+                (radius * sf) as i32,
+                (radius * sf) as i32,
             );
             SetWindowRgn(window.hwnd() as _, rgn, 1);
         }
@@ -858,7 +1061,8 @@ mod platform {
             let (w, h) = if ok != 0 && rc.right - rc.left > 1 {
                 (rc.right - rc.left, rc.bottom - rc.top)
             } else {
-                let s = (d * window.scale_factor()) as i32; (s, s)   // fallback before layout
+                let s = (d * window.scale_factor()) as i32;
+                (s, s) // fallback before layout
             };
             let n = w.min(h);
             let (left, top) = ((w - n) / 2, (h - n) / 2);
@@ -893,15 +1097,27 @@ mod platform {
     pub fn is_autostart() -> bool {
         let mut c = Command::new("reg");
         c.args(["query", RUN_KEY, "/v", RUN_NAME]);
-        super::hidden(&mut c).output().map(|o| o.status.success()).unwrap_or(false)
+        super::hidden(&mut c)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     pub fn set_autostart(on: bool) {
         if on {
             if let Ok(exe) = std::env::current_exe() {
                 let mut c = Command::new("reg");
-                c.args(["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d",
-                    &exe.to_string_lossy(), "/f"]);
+                c.args([
+                    "add",
+                    RUN_KEY,
+                    "/v",
+                    RUN_NAME,
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    &exe.to_string_lossy(),
+                    "/f",
+                ]);
                 let _ = super::hidden(&mut c).status();
             }
         } else {
@@ -934,8 +1150,27 @@ mod platform {
             c.args(args);
             let _ = super::hidden(&mut c).status();
         };
-        run(&["add", base, "/ve", "/t", "REG_SZ", "/d", "URL:BagIdea Office", "/f"]);
-        run(&["add", base, "/v", "URL Protocol", "/t", "REG_SZ", "/d", "", "/f"]);
+        run(&[
+            "add",
+            base,
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            "URL:BagIdea Office",
+            "/f",
+        ]);
+        run(&[
+            "add",
+            base,
+            "/v",
+            "URL Protocol",
+            "/t",
+            "REG_SZ",
+            "/d",
+            "",
+            "/f",
+        ]);
         let cmd_key = format!(r"{}\shell\open\command", base);
         let cmd_val = format!("\"{}\" \"%1\"", exe);
         run(&["add", &cmd_key, "/ve", "/t", "REG_SZ", "/d", &cmd_val, "/f"]);
@@ -943,7 +1178,10 @@ mod platform {
 
     // Scan state for `occl_cb` — an EnumWindows pass that flips `occluded` true
     // the moment any normal window covers the primary monitor.
-    struct OcclScan { own_pid: u32, occluded: bool }
+    struct OcclScan {
+        own_pid: u32,
+        occluded: bool,
+    }
 
     unsafe extern "system" fn occl_cb(h: HWND, lp: windows_sys::Win32::Foundation::LPARAM) -> i32 {
         use windows_sys::Win32::Foundation::RECT;
@@ -977,7 +1215,8 @@ mod platform {
         if GetMonitorInfoW(mon, &mut mi) == 0 {
             return 1;
         }
-        if mi.dwFlags & 1 == 0 { // 1 = MONITORINFOF_PRIMARY
+        if mi.dwFlags & 1 == 0 {
+            // 1 = MONITORINFOF_PRIMARY
             return 1;
         }
         let mut wr: RECT = std::mem::zeroed();
@@ -1001,8 +1240,13 @@ mod platform {
     /// window that lost focus to a small floating window still throttles the
     /// wallpaper (a foreground-only check would miss that, wasting CPU).
     pub fn desktop_occluded(_lw: f64, _lh: f64, own_pid: u32) -> bool {
-        let mut scan = OcclScan { own_pid, occluded: false };
-        unsafe { EnumWindows(Some(occl_cb), &mut scan as *mut OcclScan as _); }
+        let mut scan = OcclScan {
+            own_pid,
+            occluded: false,
+        };
+        unsafe {
+            EnumWindows(Some(occl_cb), &mut scan as *mut OcclScan as _);
+        }
         scan.occluded
     }
 
@@ -1026,8 +1270,13 @@ mod platform {
     pub const AUTOSTART_LABEL: &str = "Start at login";
 
     pub fn godot_exe(root: &PathBuf) -> String {
-        let app = root.join("godot").join("bin-mac").join("Godot.app")
-            .join("Contents").join("MacOS").join("Godot");
+        let app = root
+            .join("godot")
+            .join("bin-mac")
+            .join("Godot.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("Godot");
         if app.exists() {
             return app.to_string_lossy().into_owned();
         }
@@ -1039,9 +1288,14 @@ mod platform {
         // Stage A: a normal windowed office (the desktop-level embed comes from
         // the DYLD shim in a follow-up). Still passes --wallpaper so the world
         // reports ready the same way.
-        c.args(["--path"]).arg(root.join("godot")).args(["--", "--wallpaper"]);
+        c.args(["--path"])
+            .arg(root.join("godot"))
+            .args(["--", "--wallpaper"]);
         // If a built shim is present, inject it so Godot drops to desktop level.
-        let shim = root.join("shell").join("macos").join("libwallpaper_shim.dylib");
+        let shim = root
+            .join("shell")
+            .join("macos")
+            .join("libwallpaper_shim.dylib");
         if shim.exists() {
             c.env("DYLD_INSERT_LIBRARIES", shim);
         }
@@ -1085,9 +1339,21 @@ mod platform {
     pub fn spawn_occlusion_monitor() {
         use std::ffi::c_void;
 
-        #[repr(C)] struct OccPoint  { x: f64, y: f64 }
-        #[repr(C)] struct OccSize   { w: f64, h: f64 }
-        #[repr(C)] struct OccRect   { origin: OccPoint, size: OccSize }
+        #[repr(C)]
+        struct OccPoint {
+            x: f64,
+            y: f64,
+        }
+        #[repr(C)]
+        struct OccSize {
+            w: f64,
+            h: f64,
+        }
+        #[repr(C)]
+        struct OccRect {
+            origin: OccPoint,
+            size: OccSize,
+        }
 
         #[link(name = "CoreGraphics", kind = "framework")]
         extern "C" {
@@ -1097,11 +1363,13 @@ mod platform {
             fn CGWindowListCopyWindowInfo(opt: u32, rel: u32) -> *mut AnyObject;
         }
         #[link(name = "CoreFoundation", kind = "framework")]
-        extern "C" { fn CFRelease(cf: *const c_void); }
+        extern "C" {
+            fn CFRelease(cf: *const c_void);
+        }
 
         const OCC_FLAG: &str = "/private/tmp/bagidea_occ";
         const ON_SCREEN_ONLY: u32 = 1;
-        const NULL_WINDOW:    u32 = 0;
+        const NULL_WINDOW: u32 = 0;
 
         std::thread::spawn(move || {
             // Require 2 consecutive "covered" readings before writing the flag.
@@ -1138,23 +1406,31 @@ mod platform {
                             let ak: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"kCGWindowAlpha\0".as_ptr()];
                             let ok: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"kCGWindowOwnerName\0".as_ptr()];
                             let bk: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"kCGWindowBounds\0".as_ptr()];
-                            let xk: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"X\0".as_ptr()];
-                            let yk: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"Y\0".as_ptr()];
+                            let xk: *mut AnyObject =
+                                msg_send![class!(NSString), stringWithUTF8String: b"X\0".as_ptr()];
+                            let yk: *mut AnyObject =
+                                msg_send![class!(NSString), stringWithUTF8String: b"Y\0".as_ptr()];
                             let wk: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"Width\0".as_ptr()];
                             let hk: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: b"Height\0".as_ptr()];
 
                             for i in 0..count {
                                 let dict: *mut AnyObject = msg_send![list, objectAtIndex: i];
-                                if dict.is_null() { continue; }
+                                if dict.is_null() {
+                                    continue;
+                                }
 
                                 // Layer check: only count NORMAL app windows (layer >= 0).
                                 // This excludes Finder's desktop-icon layer (–2147483603),
                                 // which is always full-screen but doesn't hide the wallpaper
                                 // from the user's perspective.
                                 let ln: *mut AnyObject = msg_send![dict, objectForKey: lk];
-                                if ln.is_null() { continue; }
+                                if ln.is_null() {
+                                    continue;
+                                }
                                 let layer: i64 = msg_send![ln, longLongValue];
-                                if layer < 0 { continue; } // skip desktop / icon / system layers
+                                if layer < 0 {
+                                    continue;
+                                } // skip desktop / icon / system layers
 
                                 // Alpha check: skip transparent/invisible windows.
                                 // macOS Notification Center posts a full-screen transparent
@@ -1164,7 +1440,9 @@ mod platform {
                                 let an: *mut AnyObject = msg_send![dict, objectForKey: ak];
                                 if !an.is_null() {
                                     let alpha: f64 = msg_send![an, doubleValue];
-                                    if alpha < 0.1 { continue; }
+                                    if alpha < 0.1 {
+                                        continue;
+                                    }
                                 }
 
                                 // Owner check: skip known system chrome that covers the screen
@@ -1175,22 +1453,37 @@ mod platform {
                                 if !on.is_null() {
                                     let owner_ptr: *const i8 = msg_send![on, UTF8String];
                                     if !owner_ptr.is_null() {
-                                        let owner = std::ffi::CStr::from_ptr(owner_ptr).to_string_lossy();
-                                        if owner == "Dock" { continue; }
+                                        let owner =
+                                            std::ffi::CStr::from_ptr(owner_ptr).to_string_lossy();
+                                        if owner == "Dock" {
+                                            continue;
+                                        }
                                     }
                                 }
 
                                 // Bounds check — does this window cover the primary screen?
                                 let bd: *mut AnyObject = msg_send![dict, objectForKey: bk];
-                                if bd.is_null() { continue; }
+                                if bd.is_null() {
+                                    continue;
+                                }
 
                                 let xn: *mut AnyObject = msg_send![bd, objectForKey: xk];
                                 let yn: *mut AnyObject = msg_send![bd, objectForKey: yk];
                                 let wn: *mut AnyObject = msg_send![bd, objectForKey: wk];
                                 let hn: *mut AnyObject = msg_send![bd, objectForKey: hk];
-                                if wn.is_null() || hn.is_null() { continue; }
-                                let x: f64 = if xn.is_null() { 0.0 } else { msg_send![xn, doubleValue] };
-                                let y: f64 = if yn.is_null() { 0.0 } else { msg_send![yn, doubleValue] };
+                                if wn.is_null() || hn.is_null() {
+                                    continue;
+                                }
+                                let x: f64 = if xn.is_null() {
+                                    0.0
+                                } else {
+                                    msg_send![xn, doubleValue]
+                                };
+                                let y: f64 = if yn.is_null() {
+                                    0.0
+                                } else {
+                                    msg_send![yn, doubleValue]
+                                };
                                 let w: f64 = msg_send![wn, doubleValue];
                                 let h: f64 = msg_send![hn, doubleValue];
 
@@ -1198,8 +1491,10 @@ mod platform {
                                 // monitors on left (x<0), right (x≥screen.w), above, below, or
                                 // any mix in 3-monitor setups. Coverage = intersection area /
                                 // primary-screen area; threshold 90% ≈ the old 95%×95% check.
-                                let px0 = screen.origin.x; let px1 = px0 + screen.size.w;
-                                let py0 = screen.origin.y; let py1 = py0 + screen.size.h;
+                                let px0 = screen.origin.x;
+                                let px1 = px0 + screen.size.w;
+                                let py0 = screen.origin.y;
+                                let py1 = py0 + screen.size.h;
                                 let ix = (px1.min(x + w) - px0.max(x)).max(0.0);
                                 let iy = (py1.min(y + h) - py0.max(y)).max(0.0);
                                 let coverage = (ix * iy) / (screen.size.w * screen.size.h);
@@ -1231,14 +1526,20 @@ mod platform {
                     let _ = std::fs::write(OCC_FLAG, b"1");
                 }
 
-                unsafe { let () = msg_send![pool, drain]; }
+                unsafe {
+                    let () = msg_send![pool, drain];
+                }
             } // end loop
         }); // end thread
     }
 
     // The shim handles the desktop-level embed; here we just wait for the world
     // to report ready (or a timeout) and lift the splash.
-    pub fn attach_wallpaper_when_ready(_pid: u32, _root: PathBuf, proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
+    pub fn attach_wallpaper_when_ready(
+        _pid: u32,
+        _root: PathBuf,
+        proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    ) {
         std::thread::spawn(move || {
             let started = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
             let flag = std::env::temp_dir().join("bagidea_world_ready");
@@ -1297,7 +1598,10 @@ mod platform {
     }
 
     pub fn set_no_activate(_window: &Window) {}
-    pub fn raise_topmost(window: &Window) { window.set_always_on_top(false); window.set_always_on_top(true); }
+    pub fn raise_topmost(window: &Window) {
+        window.set_always_on_top(false);
+        window.set_always_on_top(true);
+    }
     pub fn suppress_nc(_window: &Window) {}
 
     fn round_corners(window: &Window, radius: f64) {
@@ -1346,7 +1650,9 @@ mod platform {
 
     fn plist_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        PathBuf::from(home).join("Library").join("LaunchAgents")
+        PathBuf::from(home)
+            .join("Library")
+            .join("LaunchAgents")
             .join("com.bagidea.office.plist")
     }
 
@@ -1513,12 +1819,20 @@ mod platform {
         std::env::var("BAGIDEA_GODOT").unwrap_or_else(|_| "godot".into())
     }
     pub fn office_args(c: &mut Command, root: &PathBuf, _cx: i32, _cy: i32) {
-        c.args(["--path"]).arg(root.join("godot")).args(["--", "--wallpaper"]);
+        c.args(["--path"])
+            .arg(root.join("godot"))
+            .args(["--", "--wallpaper"]);
     }
-    pub fn ensure_single_instance() -> bool { true }
+    pub fn ensure_single_instance() -> bool {
+        true
+    }
     pub fn spawn_hotkey_thread(_p: tao::event_loop::EventLoopProxy<UserEvent>) {}
     pub fn rebind_hotkey(_s: &str) {}
-    pub fn attach_wallpaper_when_ready(pid: u32, _root: PathBuf, proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
+    pub fn attach_wallpaper_when_ready(
+        pid: u32,
+        _root: PathBuf,
+        proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    ) {
         std::thread::spawn(move || {
             // Wait for Godot's first real frame (it writes this file), like Windows/macOS.
             let ready = std::env::temp_dir().join("bagidea_world_ready");
@@ -1538,9 +1852,14 @@ mod platform {
     // X11 window ids owned by a process (needs `xdotool`).
     fn windows_for_pid(pid: u32) -> Vec<String> {
         let p = pid.to_string();
-        match Command::new("xdotool").args(["search", "--pid", p.as_str()]).output() {
-            Ok(o) if o.status.success() =>
-                String::from_utf8_lossy(&o.stdout).split_whitespace().map(|s| s.to_string()).collect(),
+        match Command::new("xdotool")
+            .args(["search", "--pid", p.as_str()])
+            .output()
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -1549,19 +1868,32 @@ mod platform {
         let mut ids: Vec<String> = Vec::new();
         for _ in 0..25 {
             ids = windows_for_pid(pid);
-            if !ids.is_empty() { break; }
+            if !ids.is_empty() {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
         for id in &ids {
             // wmctrl accepts at most TWO state properties per -b call → split them.
             let _ = Command::new("wmctrl")
-                .args(["-i", "-r", id.as_str(), "-b", "add,below,sticky"]).status();
+                .args(["-i", "-r", id.as_str(), "-b", "add,below,sticky"])
+                .status();
             let _ = Command::new("wmctrl")
-                .args(["-i", "-r", id.as_str(), "-b", "add,skip_taskbar,skip_pager"]).status();
+                .args(["-i", "-r", id.as_str(), "-b", "add,skip_taskbar,skip_pager"])
+                .status();
             // Bonus: mark it a desktop-type window where the WM honours it (truer wallpaper).
-            let _ = Command::new("xprop").args([
-                "-id", id.as_str(), "-f", "_NET_WM_WINDOW_TYPE", "32a",
-                "-set", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DESKTOP"]).status();
+            let _ = Command::new("xprop")
+                .args([
+                    "-id",
+                    id.as_str(),
+                    "-f",
+                    "_NET_WM_WINDOW_TYPE",
+                    "32a",
+                    "-set",
+                    "_NET_WM_WINDOW_TYPE",
+                    "_NET_WM_WINDOW_TYPE_DESKTOP",
+                ])
+                .status();
         }
     }
     pub fn hide_office(pid: u32, hidden: bool) {
@@ -1570,21 +1902,34 @@ mod platform {
             let _ = Command::new("xdotool").args([action, id.as_str()]).status();
         }
     }
-    pub fn focus_pid(_pid: u32) -> bool { false }
-    pub fn apply_chrome(b: WindowBuilder) -> WindowBuilder { b }
+    pub fn focus_pid(_pid: u32) -> bool {
+        false
+    }
+    pub fn apply_chrome(b: WindowBuilder) -> WindowBuilder {
+        b
+    }
     pub fn set_no_activate(_w: &Window) {}
-    pub fn raise_topmost(window: &Window) { window.set_always_on_top(false); window.set_always_on_top(true); }
+    pub fn raise_topmost(window: &Window) {
+        window.set_always_on_top(false);
+        window.set_always_on_top(true);
+    }
     pub fn suppress_nc(_w: &Window) {}
     pub fn region_round(_w: &Window, _a: f64, _b: f64, _r: f64) {}
     pub fn region_circle(_w: &Window, _d: f64) {}
     pub fn set_feed_alpha(_w: &Window, _f: bool) {}
-    pub fn webview_extras<'a>(b: wry::WebViewBuilder<'a>) -> wry::WebViewBuilder<'a> { b }
-    pub fn is_autostart() -> bool { false }
+    pub fn webview_extras<'a>(b: wry::WebViewBuilder<'a>) -> wry::WebViewBuilder<'a> {
+        b
+    }
+    pub fn is_autostart() -> bool {
+        false
+    }
     pub fn set_autostart(_on: bool) {}
     pub fn restore_wallpaper() {}
     pub fn register_uri_scheme() {}
     pub fn install_edit_menu() {}
-    pub fn desktop_occluded(_lw: f64, _lh: f64, _own_pid: u32) -> bool { false }
+    pub fn desktop_occluded(_lw: f64, _lh: f64, _own_pid: u32) -> bool {
+        false
+    }
 }
 
 // --------------------------------------------------------------------- helpers
@@ -1664,11 +2009,23 @@ fn percent_decode(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'%' if i + 3 <= b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                Ok(v) => { out.push(v); i += 3; }
-                Err(_) => { out.push(b'%'); i += 1; }
+                Ok(v) => {
+                    out.push(v);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(b'%');
+                    i += 1;
+                }
             },
-            b'+' => { out.push(b' '); i += 1; }
-            c => { out.push(c); i += 1; }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
         }
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -1694,7 +2051,10 @@ fn main() {
     // Hand it to the running office — which asks the user to confirm before
     // installing — then exit. If the office isn't up, the forward fails and we
     // fall through to a normal launch (the office opens; click Install again).
-    if let Some(url) = std::env::args().skip(1).find(|a| a.starts_with("bagidea://")) {
+    if let Some(url) = std::env::args()
+        .skip(1)
+        .find(|a| a.starts_with("bagidea://"))
+    {
         if forward_deep_link(&url) {
             return;
         }
@@ -1755,12 +2115,19 @@ fn main() {
     // ---- system tray: the only true exit
     let tray_menu = Menu::new();
     let open_item = MenuItem::new("Open Office Chat", true, None);
+    let office_item = MenuItem::new("Open Office Window", true, None);
     let hide_item = CheckMenuItem::new("Hide office (agents keep working)", true, false, None);
     let restart_item = MenuItem::new("Restart office", true, None);
-    let autostart_item = CheckMenuItem::new(platform::AUTOSTART_LABEL, true, platform::is_autostart(), None);
+    let autostart_item = CheckMenuItem::new(
+        platform::AUTOSTART_LABEL,
+        true,
+        platform::is_autostart(),
+        None,
+    );
     let exit_item = MenuItem::new("Exit BagIdea Office", true, None);
     let _ = tray_menu.append_items(&[
         &open_item,
+        &office_item,
         &hide_item,
         &restart_item,
         &autostart_item,
@@ -1774,6 +2141,7 @@ fn main() {
         .build()
         .expect("tray");
     let open_id = open_item.id().clone();
+    let office_id = office_item.id().clone();
     let hide_id = hide_item.id().clone();
     let restart_id = restart_item.id().clone();
     let autostart_id = autostart_item.id().clone();
@@ -1788,12 +2156,18 @@ fn main() {
         platform::spawn_occlusion_monitor();
     }
 
-    let office_pid = office_child.as_ref().map(|c| c.id()).unwrap_or(0);
+    let mut office_pid = office_child.as_ref().map(|c| c.id()).unwrap_or(0);
 
     // ---- screen-aware default positions
     let (screen_w, screen_h, sf) = event_loop
         .primary_monitor()
-        .map(|m| (m.size().width as f64, m.size().height as f64, m.scale_factor()))
+        .map(|m| {
+            (
+                m.size().width as f64,
+                m.size().height as f64,
+                m.scale_factor(),
+            )
+        })
         .unwrap_or((1920.0, 1080.0, 1.0));
     let logical_w = screen_w / sf;
     let logical_h = screen_h / sf;
@@ -1807,8 +2181,14 @@ fn main() {
 
     // ---- boot splash: a pulsing circular logo, centered
     let splash = chrome_window(
-        &event_loop, "BagIdea", SPLASH_SIZE, SPLASH_SIZE,
-        (logical_w - SPLASH_SIZE) / 2.0, (logical_h - SPLASH_SIZE) / 2.0 - 30.0, None, true,
+        &event_loop,
+        "BagIdea",
+        SPLASH_SIZE,
+        SPLASH_SIZE,
+        (logical_w - SPLASH_SIZE) / 2.0,
+        (logical_h - SPLASH_SIZE) / 2.0 - 30.0,
+        None,
+        true,
     );
     platform::set_no_activate(&splash);
     let _splash_view = WebViewBuilder::new()
@@ -1820,7 +2200,14 @@ fn main() {
 
     // ---- overlay (born visible but parked off-screen)
     let overlay = chrome_window(
-        &event_loop, "BagIdea Office", FULL.0, FULL.1, PARK.0, PARK.1, app_icon(), false,
+        &event_loop,
+        "BagIdea Office",
+        FULL.0,
+        FULL.1,
+        PARK.0,
+        PARK.1,
+        app_icon(),
+        false,
     );
     overlay.set_outer_position(LogicalPosition::new(PARK.0, PARK.1));
     let overlay_id = overlay.id();
@@ -1834,23 +2221,34 @@ fn main() {
                     "drag-overlay" => p_overlay.send_event(UserEvent::DragOverlay),
                     "hide" => p_overlay.send_event(UserEvent::HideOverlay),
                     "mini" => p_overlay.send_event(UserEvent::MiniToggle),
-                    s if s.starts_with("hotkey:") =>
-                        p_overlay.send_event(UserEvent::SetHotkey(s[7..].to_string())),
-                    s if s.starts_with("open-window:") =>
-                        p_overlay.send_event(UserEvent::OpenWindow(s[12..].to_string())),
+                    "fullscreen" => p_overlay.send_event(UserEvent::FullscreenToggle),
+                    s if s.starts_with("hotkey:") => {
+                        p_overlay.send_event(UserEvent::SetHotkey(s[7..].to_string()))
+                    }
+                    s if s.starts_with("open-window:") => {
+                        p_overlay.send_event(UserEvent::OpenWindow(s[12..].to_string()))
+                    }
                     _ => Ok(()),
                 };
-            }))
-        .build(&overlay)
-        .expect("overlay webview");
+            }),
+    )
+    .build(&overlay)
+    .expect("overlay webview");
     platform::region_round(&overlay, FULL.0, FULL.1, 18.0);
 
     // ---- circular chat head
     let orb = chrome_window(
-        &event_loop, "BagIdea", ORB_SIZE, ORB_SIZE, orb_x, orb_y, app_icon(), true,
+        &event_loop,
+        "BagIdea",
+        ORB_SIZE,
+        ORB_SIZE,
+        orb_x,
+        orb_y,
+        app_icon(),
+        true,
     );
     platform::set_no_activate(&orb);
-    platform::suppress_nc(&orb);   // swallow non-client paint → no white caption bar on click
+    platform::suppress_nc(&orb); // swallow non-client paint → no white caption bar on click
     let orb_id = orb.id();
     let p_orb = proxy.clone();
     let _orb_view = WebViewBuilder::new()
@@ -1881,6 +2279,7 @@ fn main() {
     let mut popups: Vec<(tao::window::WindowId, String, Window, wry::WebView)> = Vec::new();
     let mut mini = false;
     let mut feed = false;
+    let mut overlay_fullscreen = false;
     let mut editor_pid: u32 = 0;
     let mut world_ready = false;
     // Tracks whether the wallpaper is believed visible (30 fps) vs throttled
@@ -1890,15 +2289,14 @@ fn main() {
     event_loop.run(move |event, target, control_flow| {
         // A slow poll tick keeps the tray channels live without pinning a core.
         *control_flow = ControlFlow::WaitUntil(
-            std::time::Instant::now() + std::time::Duration::from_millis(250));
+            std::time::Instant::now() + std::time::Duration::from_millis(250),
+        );
 
         // Chat-head watchdog — THROTTLED. Re-asserting window state every tick
         // pins a CPU core on macOS (each level/visibility poke wakes the loop),
         // so we only check every ~2s and only touch the window when the orb has
         // genuinely drifted off-screen after the world is up.
-        if world_ready && !hide_item.is_checked()
-            && last_watch.elapsed().as_millis() >= 2000
-        {
+        if world_ready && !hide_item.is_checked() && last_watch.elapsed().as_millis() >= 2000 {
             last_watch = std::time::Instant::now();
             let off = orb.outer_position().map(|p| p.x < -2000).unwrap_or(false);
             if off {
@@ -1921,6 +2319,46 @@ fn main() {
                 shutdown = true;
             } else if ev.id == open_id {
                 toggle = true;
+            } else if ev.id == office_id {
+                let mut office_exited = false;
+                let office_alive = if let Some(child) = office_child.as_mut() {
+                    match child.try_wait() {
+                        Ok(Some(_)) => {
+                            office_exited = true;
+                            false
+                        }
+                        Ok(None) => true,
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                };
+                if office_exited {
+                    office_child = None;
+                    office_pid = 0;
+                }
+
+                if office_alive && platform::focus_pid(office_pid) {
+                    let _ = hide_item.set_checked(false);
+                    vis_on = true;
+                    post_visibility(true);
+                } else {
+                    splash.set_visible(true);
+                    splash.set_always_on_top(true);
+                    world_ready = false;
+                    if let Some(child) = spawn_office(&root, phys_w / 2, phys_h / 2 - 30) {
+                        office_pid = child.id();
+                        platform::attach_wallpaper_when_ready(
+                            office_pid,
+                            root.clone(),
+                            proxy.clone(),
+                        );
+                        office_child = Some(child);
+                        let _ = hide_item.set_checked(false);
+                        vis_on = true;
+                        post_visibility(true);
+                    }
+                }
             } else if ev.id == hide_id {
                 let hidden = hide_item.is_checked();
                 platform::hide_office(office_pid, hidden);
@@ -1942,7 +2380,12 @@ fn main() {
         }
 
         while let Ok(ev) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. } = ev {
+            if let TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                button_state: tray_icon::MouseButtonState::Up,
+                ..
+            } = ev
+            {
                 toggle = true;
             }
         }
@@ -1953,7 +2396,13 @@ fn main() {
                 .map(|p| p.x < -2000)
                 .unwrap_or(true);
             if hidden {
-                let (px, py) = if feed_now { (feed_x, feed_y) } else { (overlay_x, overlay_y) };
+                let (px, py) = if overlay_fullscreen {
+                    (0.0, 0.0)
+                } else if feed_now {
+                    (feed_x, feed_y)
+                } else {
+                    (overlay_x, overlay_y)
+                };
                 overlay.set_outer_position(LogicalPosition::new(px, py));
                 overlay.set_focus();
                 raise_orb(&orb);
@@ -1968,7 +2417,11 @@ fn main() {
         }
 
         match event {
-            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
                 if window_id == overlay_id {
                     overlay.set_outer_position(LogicalPosition::new(PARK.0, PARK.1));
                 } else {
@@ -1976,15 +2429,36 @@ fn main() {
                     popups.retain(|(id, _, _, _)| *id != window_id);
                 }
             }
-            Event::WindowEvent { window_id, event: WindowEvent::Focused(true), .. } => {
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::Focused(true),
+                ..
+            } => {
                 if window_id == overlay_id {
                     raise_orb(&orb);
                 }
             }
-            Event::WindowEvent { window_id, event: WindowEvent::Resized(_), .. } => {
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::Resized(_),
+                ..
+            } => {
                 if window_id == overlay_id {
-                    let (w, h) = if feed { (FEED_W, feed_h) } else if mini { MINI } else { FULL };
-                    platform::region_round(&overlay, w, h, if feed { 14.0 } else { 18.0 });
+                    let (w, h) = if overlay_fullscreen {
+                        (logical_w, logical_h)
+                    } else if feed {
+                        (FEED_W, feed_h)
+                    } else if mini {
+                        MINI
+                    } else {
+                        FULL
+                    };
+                    platform::region_round(
+                        &overlay,
+                        w,
+                        h,
+                        if overlay_fullscreen { 0.0 } else if feed { 14.0 } else { 18.0 },
+                    );
                 } else if window_id == orb_id {
                     // Re-clip the orb to its circle on any DPI / monitor change so the
                     // transparent corners keep falling through to the desktop.
@@ -2003,7 +2477,10 @@ fn main() {
                 }
                 UserEvent::EditorOpening => {
                     if platform::focus_pid(editor_pid) {
-                        let _ = std::fs::write(std::env::temp_dir().join("bagidea_editor_ready"), "focused");
+                        let _ = std::fs::write(
+                            std::env::temp_dir().join("bagidea_editor_ready"),
+                            "focused",
+                        );
                     } else {
                         editor_pid = 0;
                         splash.set_visible(true);
@@ -2022,17 +2499,46 @@ fn main() {
                 }
                 UserEvent::MiniToggle => {
                     if !feed {
+                        overlay_fullscreen = false;
+                        let _ = overlay_view
+                            .evaluate_script("window.setFullscreenMode && setFullscreenMode(false)");
                         mini = !mini;
                         let (w, h) = if mini { MINI } else { FULL };
                         overlay.set_inner_size(LogicalSize::new(w, h));
+                        if !mini {
+                            overlay.set_outer_position(LogicalPosition::new(overlay_x, overlay_y));
+                        }
                         platform::region_round(&overlay, w, h, 18.0);
                         raise_orb(&orb);
                     }
                 }
+                UserEvent::FullscreenToggle => {
+                    if !feed {
+                        overlay_fullscreen = !overlay_fullscreen;
+                        mini = false;
+                        let _ = overlay_view.evaluate_script(&format!(
+                            "window.setFullscreenMode && setFullscreenMode({})",
+                            overlay_fullscreen
+                        ));
+                        if overlay_fullscreen {
+                            overlay.set_outer_position(LogicalPosition::new(0.0, 0.0));
+                            overlay.set_inner_size(LogicalSize::new(logical_w, logical_h));
+                            platform::region_round(&overlay, logical_w, logical_h, 0.0);
+                        } else {
+                            overlay.set_inner_size(LogicalSize::new(FULL.0, FULL.1));
+                            overlay.set_outer_position(LogicalPosition::new(overlay_x, overlay_y));
+                            platform::region_round(&overlay, FULL.0, FULL.1, 18.0);
+                        }
+                        raise_orb(&orb);
+                    }
+                }
                 UserEvent::FeedToggle => {
+                    overlay_fullscreen = false;
                     feed = !feed;
-                    let _ = overlay_view.evaluate_script(&format!(
-                        "window.setFeedMode && setFeedMode({})", feed));
+                    let _ = overlay_view
+                        .evaluate_script("window.setFullscreenMode && setFullscreenMode(false)");
+                    let _ = overlay_view
+                        .evaluate_script(&format!("window.setFeedMode && setFeedMode({})", feed));
                     let _ = overlay.set_ignore_cursor_events(false);
                     platform::set_feed_alpha(&overlay, feed);
                     if feed {
@@ -2047,8 +2553,12 @@ fn main() {
                     }
                     raise_orb(&orb);
                 }
-                UserEvent::DragOrb => { let _ = orb.drag_window(); }
-                UserEvent::DragOverlay => { let _ = overlay.drag_window(); }
+                UserEvent::DragOrb => {
+                    let _ = orb.drag_window();
+                }
+                UserEvent::DragOverlay => {
+                    let _ = overlay.drag_window();
+                }
                 UserEvent::PttKey(pressed) => {
                     // True hold-to-talk: key DOWN starts recording, key UP sends.
                     // (The low-level hook fires once per physical press/release.)
@@ -2058,7 +2568,9 @@ fn main() {
                             .map(|p| p.x < -2000)
                             .unwrap_or(true);
                         if hidden {
-                            let (px, py) = if feed {
+                            let (px, py) = if overlay_fullscreen {
+                                (0.0, 0.0)
+                            } else if feed {
                                 (feed_x, feed_y)
                             } else {
                                 (overlay_x, overlay_y)
@@ -2080,24 +2592,38 @@ fn main() {
                     let qval = |name: &str| -> Option<String> {
                         u.split('?').nth(1)?.split('&').find_map(|kv| {
                             let mut it = kv.splitn(2, '=');
-                            if it.next()? == name { Some(it.next().unwrap_or("").to_string()) } else { None }
+                            if it.next()? == name {
+                                Some(it.next().unwrap_or("").to_string())
+                            } else {
+                                None
+                            }
                         })
                     };
                     let key = qval("key").unwrap_or_default();
                     // Single-instance per plugin: already open → surface it, never duplicate.
-                    let existing = if key.is_empty() { None }
-                        else { popups.iter().position(|(_, k, _, _)| *k == key) };
+                    let existing = if key.is_empty() {
+                        None
+                    } else {
+                        popups.iter().position(|(_, k, _, _)| *k == key)
+                    };
                     if let Some(ix) = existing {
                         let win = &popups[ix].2;
                         win.set_minimized(false);
                         win.set_visible(true);
                         win.set_focus();
                     } else {
-                        let w = qval("w").and_then(|s| s.parse::<f64>().ok()).unwrap_or(900.0);
-                        let h = qval("h").and_then(|s| s.parse::<f64>().ok()).unwrap_or(680.0);
+                        let w = qval("w")
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(900.0);
+                        let h = qval("h")
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(680.0);
                         let resizable = qval("resizable").map(|s| s != "0").unwrap_or(true);
-                        let full = if u.starts_with("http") { u.clone() }
-                            else { format!("http://127.0.0.1:8787{}", u) };
+                        let full = if u.starts_with("http") {
+                            u.clone()
+                        } else {
+                            format!("http://127.0.0.1:8787{}", u)
+                        };
                         let win = WindowBuilder::new()
                             .with_title("BagIdea Office")
                             .with_inner_size(LogicalSize::new(w, h))
@@ -2130,8 +2656,9 @@ fn main() {
                                         "win-max" => pproxy.send_event(UserEvent::PopupMax(id)),
                                         _ => Ok(()),
                                     };
-                                }))
-                            .build(&win)
+                                }),
+                        )
+                        .build(&win)
                         {
                             Ok(view) => popups.push((id, key, win, view)),
                             Err(e) => eprintln!("[shell] popup webview: {e}"),

@@ -19,6 +19,7 @@
     color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden;
     border: 1px solid rgba(110, 185, 255, 0.35); border-radius: 18px;
   }
+  body.fullscreen { border-radius: 0; border: none; }
   .px { image-rendering: pixelated; background-repeat: no-repeat; }
 
   /* themed scrollbars */
@@ -865,6 +866,7 @@
   <button id="setBtn" title="Office settings — agents, roles" style="margin-left:6px">⚙</button>
   <button id="moreBtn" title="เพิ่มเติม" style="margin-left:6px">⋯</button>
   <button id="sideBtn" title="Security Center & Mission Control" style="margin-left:6px">🛡<span id="permBadge"></span></button>
+  <div class="winbtn" id="fullBtn" title="Fullscreen chat" style="margin-left:6px"></div>
   <div class="winbtn" id="miniBtn" title="Mini window" style="margin-left:6px"></div>
   <div class="winbtn hide" id="hideBtn" title="Hide (chat head brings it back)">—</div>
 </header>
@@ -1080,11 +1082,76 @@
     "ล่าสุด (ต่อเนื่องอัตโนมัติ)": { en: "Latest (auto-continued)", zh: "最新（自动延续）", ja: "最新（自動継続）" },
     "▼ ดูทั้งหมด": { en: "▼ See all", zh: "▼ 查看全部", ja: "▼ すべて表示" },
     "▲ พับ": { en: "▲ Collapse", zh: "▲ 收起", ja: "▲ 折りたたむ" },
-    "ส่งแล้ว ✓": { en: "Sent ✓", zh: "已发送 ✓", ja: "送信済み ✓" },
-    "ทดสอบ": { en: "Test", zh: "测试", ja: "テスト" },
-    "เปลี่ยน": { en: "Change", zh: "更改", ja: "変更" },
-    // editor palette
-    "🪑 โต๊ะทำงาน": { en: "🪑 Desk", zh: "🪑 办公桌", ja: "🪑 デスク" },
+	    "ส่งแล้ว ✓": { en: "Sent ✓", zh: "已发送 ✓", ja: "送信済み ✓" },
+	    "ทดสอบ": { en: "Test", zh: "测试", ja: "テスト" },
+	    "เปลี่ยน": { en: "Change", zh: "更改", ja: "変更" },
+	    // dynamic office-log fragments rendered inside NO_I18N panes
+	    "แตกร่างขึ้น Ghost Deck": { en: "split onto the Ghost Deck", zh: "分身登上 Ghost Deck", ja: "Ghost Deckへ分身" },
+	    "งานเสร็จ ✓ กลับเข้าร่าง": { en: "task done ✓ merged back", zh: "任务完成 ✓ 已回归本体", ja: "完了 ✓ 本体へ戻りました" },
+	    "ล้มเหลว ✗ กลับเข้าร่าง": { en: "failed ✗ merged back", zh: "失败 ✗ 已回归本体", ja: "失敗 ✗ 本体へ戻りました" },
+	    "แตกร่าง": { en: "split into", zh: "分身出", ja: "分身" },
+	    "sub-agents → Ghost Deck": { en: "sub-agents → Ghost Deck", zh: "个 sub-agent → Ghost Deck", ja: "sub-agent → Ghost Deck" },
+	    "อนุญาต": { en: "allowed", zh: "已允许", ja: "許可" },
+	    "ปฏิเสธ": { en: "denied", zh: "已拒绝", ja: "拒否" },
+	    "เดินมาส่งสรุปงานแล้ว ↑": { en: "came over with the summary ↑", zh: "已带着工作汇报过来 ↑", ja: "報告を届けに来ました ↑" },
+	    "⏳ กำลังอัปเดต… โปรแกรมจะปิดและเปิดใหม่เอง (มีหน้าต่างอัปเดตเด้งขึ้นมา)": { en: "⏳ Updating… the app will close and reopen itself (an updater window will appear)", zh: "⏳ 正在更新… 程序会自动关闭并重新打开（会弹出更新窗口）", ja: "⏳ 更新中… アプリは自動で閉じて再起動します（更新ウィンドウが表示されます）" },
+	    "⚠️ อัปเดตยังไม่เริ่ม — เปิด Terminal แล้วรัน": { en: "⚠️ Update did not start — open Terminal and run", zh: "⚠️ 更新尚未开始 — 请打开终端并运行", ja: "⚠️ 更新が開始されません — Terminalを開いて実行してください" },
+	    "— อัปเดตได้จากแถบในหน้าแชท หรือ `bagidea update`": { en: "— update from the chat banner or `bagidea update`", zh: "— 可从聊天页横幅更新，或运行 `bagidea update`", ja: "— チャットのバナーまたは `bagidea update` で更新できます" },
+	    "เดินมารับคำสั่ง": { en: "coming to receive orders", zh: "正在前来接收指令", ja: "指示を受け取りに来ています" },
+	    "มี agent เขียนโน้ตบนกระดาน": { en: "An agent wrote notes on the board", zh: "有 agent 在看板上写了笔记", ja: "エージェントがボードにメモを書きました" },
+	    "⏹ หยุดงาน agent แล้ว — เปิดโปรเจคเข้าไปทำต่อได้เลย": { en: "⏹ Agent stopped — you can open the project and continue", zh: "⏹ Agent 已停止 — 现在可以打开项目继续处理", ja: "⏹ エージェントを停止しました — プロジェクトを開いて続行できます" },
+	    "✅ อนุมัติแล้ว — Director กำลังจัดทีม": { en: "✅ Approved — Director is assigning the team", zh: "✅ 已批准 — Director 正在安排团队", ja: "✅ 承認しました — Directorがチームを編成中" },
+	    "ส่งคำตอบให้ทีมแล้ว": { en: "Reply sent to the team", zh: "已把回复发送给团队", ja: "チームへ返信しました" },
+	    "เปิดเป็นหน้าต่างใหม่": { en: "Open in a new window", zh: "在新窗口打开", ja: "新しいウィンドウで開く" },
+	    "คลิกเพื่อดูภาพ · ปุ่ม ⤢ เปิดเป็นหน้าต่างใหม่": { en: "Click to view image · ⤢ opens it in a new window", zh: "点击查看图片 · ⤢ 在新窗口打开", ja: "クリックで画像を表示 · ⤢ で新しいウィンドウ" },
+	    "เปิดโฟลเดอร์ที่เก็บไฟล์": { en: "Open the containing folder", zh: "打开所在文件夹", ja: "保存先フォルダを開く" },
+	    "เปิดเป็นหน้าต่างใหม่ (โปรแกรมดูไฟล์ของเครื่อง)": { en: "Open in a new window (system file viewer)", zh: "在新窗口打开（系统文件查看器）", ja: "新しいウィンドウで開く（システムのビューア）" },
+	    "คุณ": { en: "You", zh: "你", ja: "あなた" },
+	    "แก้ไข": { en: "Edit", zh: "编辑", ja: "編集" },
+	    "นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง": { en: "This is you. Assign work here and the Director will come receive it.", zh: "这是你本人。在这里下达任务，Director 会来接收指令。", ja: "これはあなたです。ここで依頼するとDirectorが受け取りに来ます。" },
+	    "🛡 ขอใช้": { en: "🛡 Requesting access to", zh: "🛡 请求使用", ja: "🛡 使用リクエスト" },
+	    "ตลอดไป": { en: "Always", zh: "始终允许", ja: "常に許可" },
+	    "ไม่": { en: "No", zh: "否", ja: "いいえ" },
+	    "✓ อนุญาตอัตโนมัติ (ตามสิทธิ์ที่ให้ไว้)": { en: "✓ Auto-allowed by saved permission", zh: "✓ 已按保存的权限自动允许", ja: "✓ 保存済み権限で自動許可" },
+	    "✓ อนุญาตแล้ว": { en: "✓ Allowed", zh: "✓ 已允许", ja: "✓ 許可しました" },
+	    "✗ หมดเวลา — ปฏิเสธอัตโนมัติ": { en: "✗ Timed out — auto-denied", zh: "✗ 已超时 — 自动拒绝", ja: "✗ タイムアウト — 自動拒否" },
+	    "✗ ไม่อนุญาต": { en: "✗ Denied", zh: "✗ 已拒绝", ja: "✗ 拒否しました" },
+	    "👻 แตกร่างรับงาน:": { en: "👻 Clone took task:", zh: "👻 分身接到任务：", ja: "👻 分身がタスクを受領:" },
+	    "✓ งานเสร็จ กลับเข้าร่าง": { en: "✓ Task done, merged back", zh: "✓ 任务完成，已回归本体", ja: "✓ 完了、本体へ戻りました" },
+	    "✗ ล้มเหลว": { en: "✗ Failed", zh: "✗ 失败", ja: "✗ 失敗" },
+	    "✓ งานเสร็จ": { en: "✓ Task done", zh: "✓ 任务完成", ja: "✓ 完了" },
+	    "✗ งานล้มเหลว": { en: "✗ Task failed", zh: "✗ 任务失败", ja: "✗ タスク失敗" },
+	    "🧠 จดความจำใหม่": { en: "🧠 Saved new memory", zh: "🧠 已记录新记忆", ja: "🧠 新しい記憶を保存" },
+	    "ข้อ": { en: "items", zh: "条", ja: "件" },
+	    "🛡 จำสิทธิ์แล้ว — เครื่องมือนี้จะไม่ถามซ้ำสำหรับ agent นี้": { en: "🛡 Permission remembered — this tool will not ask again for this agent", zh: "🛡 已记住权限 — 该工具不会再向此 agent 询问", ja: "🛡 権限を記憶しました — このエージェントでは再確認しません" },
+	    "🛡 การ์ดนี้หมดอายุไปแล้ว (คำขอถูกปิดไปก่อนหน้า)": { en: "🛡 This card has expired (the request was already closed)", zh: "🛡 此卡片已过期（请求此前已关闭）", ja: "🛡 このカードは期限切れです（リクエストは既に閉じられました）" },
+	    "งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย": { en: "Sub-agent work (read-only) — click an agent in the rail to resume chat", zh: "sub-agent 工作记录（只读）— 点击 rail 中的 agent 返回聊天", ja: "sub-agentの作業（読み取り専用）— railのagentをクリックして戻る" },
+	    "บันทึกการประชุม (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย": { en: "Meeting log (read-only) — click an agent in the rail to resume chat", zh: "会议记录（只读）— 点击 rail 中的 agent 返回聊天", ja: "会議ログ（読み取り専用）— railのagentをクリックして戻る" },
+	    "🆕 thread ใหม่ — เริ่มเมื่อส่งข้อความแรก": { en: "🆕 New thread — starts when you send the first message", zh: "🆕 新 thread — 发送第一条消息时开始", ja: "🆕 新しいthread — 最初のメッセージ送信時に開始" },
+	    "ยังไม่มี — จะสร้างให้เองเมื่อคุยครั้งแรก": { en: "None yet — one will be created when you first chat", zh: "暂无 — 首次聊天时会自动创建", ja: "まだありません — 最初の会話時に作成されます" },
+	    "ล่าสุด": { en: "Latest", zh: "最新", ja: "最新" },
+	    "ความจำใหม่ ไม่ต่อจากของเดิม": { en: "Fresh memory, not continued from the old one", zh: "全新记忆，不延续旧内容", ja: "新しい記憶、以前の続きではありません" },
+	    "(ยังไม่มี thread เก่า — คุยครั้งแรกจะสร้างให้เอง)": { en: "(no old threads yet — the first chat creates one)", zh: "（暂无旧 thread — 第一次聊天会自动创建）", ja: "（過去threadなし — 最初の会話で作成）" },
+	    "—  🗣 การประชุม  —": { en: "—  🗣 Meetings  —", zh: "—  🗣 会议  —", ja: "—  🗣 会議  —" },
+	    "ร่างแยกของ": { en: "clone of", zh: "分身来自", ja: "分身元" },
+	    "✓ สำเร็จ": { en: "✓ done", zh: "✓ 成功", ja: "✓ 成功" },
+	    "⏳ กำลังทำ": { en: "⏳ running", zh: "⏳ 进行中", ja: "⏳ 実行中" },
+	    "คุยเสียงสด (realtime)": { en: "Live voice chat (realtime)", zh: "实时语音聊天", ja: "ライブ音声チャット（realtime）" },
+	    "กด 📞 อีกครั้งเพื่อวางสาย": { en: "Press 📞 again to hang up", zh: "再次按 📞 挂断", ja: "📞 をもう一度押して終了" },
+	    "กด 📞 เพื่อวางสาย": { en: "Press 📞 to hang up", zh: "按 📞 挂断", ja: "📞 で終了" },
+	    "⏹ ยืนยันหยุด?": { en: "⏹ Confirm stop?", zh: "⏹ 确认停止？", ja: "⏹ 停止しますか？" },
+	    "⏹ หยุด agent": { en: "⏹ Stop agent", zh: "⏹ 停止 agent", ja: "⏹ agentを停止" },
+	    "ออฟฟิศเต็มแล้ว — สูงสุด": { en: "Office is full — max", zh: "办公室已满 — 上限", ja: "オフィス満員 — 上限" },
+	    "คน (ใช้การแตกร่างผีสำหรับงานขนาน)": { en: "people (use ghost clones for parallel work)", zh: "人（并行工作请用幽灵分身）", ja: "人（並列作業はゴースト分身を使用）" },
+	    "ออฟฟิศเต็ม": { en: "Office full", zh: "办公室已满", ja: "オフィス満員" },
+	    "ปิดการเปิดอัตโนมัติแล้ว": { en: "Auto-start turned off", zh: "已关闭自动启动", ja: "自動起動をオフにしました" },
+	    "เลือกเสียงก่อนนะ": { en: "Pick a voice first", zh: "先选一个声音", ja: "先に音声を選んでください" },
+	    "✅ ติดตั้ง plugin แล้ว": { en: "✅ Plugin installed", zh: "✅ 插件已安装", ja: "✅ プラグインをインストールしました" },
+	    "📦 กำลังติดตั้ง plugin…": { en: "📦 Installing plugin…", zh: "📦 正在安装插件…", ja: "📦 プラグインをインストール中…" },
+	    "✗ ตั้งค่าไม่สำเร็จ": { en: "✗ Settings failed", zh: "✗ 设置失败", ja: "✗ 設定に失敗しました" },
+	    "คลิกเพื่อเอาออก": { en: "Click to remove", zh: "点击移除", ja: "クリックで削除" },
+	    // editor palette
+	    "🪑 โต๊ะทำงาน": { en: "🪑 Desk", zh: "🪑 办公桌", ja: "🪑 デスク" },
     "🍽 โต๊ะกลม": { en: "🍽 Round table", zh: "🍽 圆桌", ja: "🍽 丸テーブル" },
     "💺 เก้าอี้": { en: "💺 Chair", zh: "💺 椅子", ja: "💺 椅子" },
     "📚 ชั้นวาง": { en: "📚 Shelf", zh: "📚 书架", ja: "📚 棚" },
@@ -1331,7 +1398,7 @@
       f.textContent = id[0].toUpperCase();
       face(f, id, 36);
       const nm = document.createElement("div");
-      nm.className = "nm"; nm.textContent = id === "ceo" ? nameOf(id) + " 〔คุณ〕" : nameOf(id);
+      nm.className = "nm"; nm.textContent = id === "ceo" ? nameOf(id) + " 〔" + tr("คุณ") + "〕" : nameOf(id);
       const dot = document.createElement("div");
       dot.className = "dot";
       dot.style.background = DOTS[agents[id].state] || "#4ade80";
@@ -1348,11 +1415,11 @@
       const ed = document.createElement("div");
       ed.className = "editbtn";
       ed.textContent = "✏";
-      ed.title = "แก้ไข " + nameOf(id);
+      ed.title = tr("แก้ไข") + " " + nameOf(id);
       ed.onclick = (e) => { e.stopPropagation(); openEditor(id); };
       seat.appendChild(ed);
       seat.title = id === "ceo"
-        ? `${nameOf(id)} — นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง`
+        ? `${nameOf(id)} — ${tr("นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง")}`
         : `${nameOf(id)} — ${roleOf(id)} (double-click: ID card)`;
       railEl.appendChild(seat);
     }
@@ -1663,10 +1730,10 @@
           sel.appendChild(o);
         }
       };
-      fill(inSel, "audioinput", audioInId(), "ไมโครโฟน");
-      fill(outSel, "audiooutput", audioOutId(), "ลำโพง");
+      fill(inSel, "audioinput", audioInId(), tr("ไมโครโฟน"));
+      fill(outSel, "audiooutput", audioOutId(), tr("ลำโพง"));
     } catch {
-      if (note) note.textContent = "อ่านรายชื่ออุปกรณ์เสียงไม่ได้ — ลองอนุญาตไมโครโฟนก่อน";
+      if (note) note.textContent = tr("อ่านรายชื่ออุปกรณ์เสียงไม่ได้ — ลองอนุญาตไมโครโฟนก่อน");
     }
     inSel.onchange = () => { try { localStorage.setItem("audioIn", inSel.value); } catch {} };
     if (sinkOK) {
@@ -1676,7 +1743,7 @@
       };
     } else {
       outSel.disabled = true;
-      if (note) note.textContent = "ℹ️ ระบบนี้ยังไม่รองรับการเลือกลำโพงในแอป — เสียงจะออกอุปกรณ์เริ่มต้น (เปลี่ยนได้ที่การตั้งค่าเสียงของ Windows/macOS)";
+      if (note) note.textContent = tr("ℹ️ ระบบนี้ยังไม่รองรับการเลือกลำโพงในแอป — เสียงจะออกอุปกรณ์เริ่มต้น (เปลี่ยนได้ที่การตั้งค่าเสียงของ Windows/macOS)");
     }
   }
 
@@ -1697,7 +1764,7 @@
     src.connect(proc);
     proc.connect(ctx.destination);
     _rec = rec;
-    _recTimeout = setTimeout(() => voiceAbort("⏱ เกิน 60 วินาที — ตัดจบอัตโนมัติ"), 60000);
+    _recTimeout = setTimeout(() => voiceAbort(tr("⏱ เกิน 60 วินาที — ตัดจบอัตโนมัติ")), 60000);
   }
 
   function recStop() {
@@ -1759,7 +1826,7 @@
     if (lb) lb.classList.toggle("nokey", !FEATURES.live);
   }
   function voiceGateFail() {
-    pillShow("✗ ฟีเจอร์เสียงต้องมี Main API key (OpenAI หรือ Gemini)", "เปิดหน้าตั้งค่าให้แล้ว", false);
+    pillShow(tr("✗ ฟีเจอร์เสียงต้องมี Main API key (OpenAI หรือ Gemini)"), tr("เปิดหน้าตั้งค่าให้แล้ว"), false);
     setTimeout(pillHide, 3600);
     openSettings("connect");
   }
@@ -1768,17 +1835,17 @@
     if (!FEATURES.stt) { voiceGateFail(); return false; }
     if (_rec || _voiceBusy) return false;
     try { await recStart(); } catch (e) {
-      pillShow("✗ ไมโครโฟนไม่พร้อม — กดอนุญาตไมค์ให้แอปก่อน", "", false);
+      pillShow(tr("✗ ไมโครโฟนไม่พร้อม — กดอนุญาตไมค์ให้แอปก่อน"), "", false);
       setTimeout(pillHide, 3500);
       return false;
     }
-    pillShow("กำลังฟัง… พูดได้เลย", hint, true);
+    pillShow(tr("กำลังฟัง… พูดได้เลย"), hint, true);
     return true;
   }
   async function voiceFinish() {
     const blob = recStop();
     if (!blob) { pillHide(); return null; }
-    pillShow("⏳ กำลังถอดเสียง…", "", false);
+    pillShow(tr("⏳ กำลังถอดเสียง…"), "", false);
     _voiceBusy = true;
     try {
       const r = await fetch("/voice/transcribe", { method: "POST",
@@ -1801,13 +1868,13 @@
   let LIVE = null;
   async function liveStart() {
     if (!FEATURES.live) {
-      addChip("📞 Realtime ต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT");
+      addChip(tr("📞 Realtime ต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT"));
       return openSettings("connect");
     }
     const btn = document.getElementById("liveBtn");
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraint({ channelCount: 1 }) }); }
-    catch { return addChip("📞 เปิดไมค์ไม่ได้ — กดอนุญาตไมค์ก่อน"); }
+    catch { return addChip(tr("📞 เปิดไมค์ไม่ได้ — กดอนุญาตไมค์ก่อน")); }
     // calls always go to the main agent (it uses its own voice, or a default preset)
     const ws = new WebSocket(`ws://127.0.0.1:8787/live?agent=main`);
     const ctxIn = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -1815,11 +1882,11 @@
     let playAt = 0;
     LIVE = { ws, stream, ctxIn, playCtx };
     btn.classList.add("rec");
-    pillShow("📞 กำลังเชื่อมต่อสายสด…", "กด 📞 อีกครั้งเพื่อวางสาย", false);
+    pillShow(tr("📞 กำลังเชื่อมต่อสายสด…"), tr("กด 📞 อีกครั้งเพื่อวางสาย"), false);
 
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === "live-ready") pillShow("📞 สายต่อแล้ว — พูดได้เลย", "กด 📞 เพื่อวางสาย", true);
+      if (m.type === "live-ready") pillShow(tr("📞 สายต่อแล้ว — พูดได้เลย"), tr("กด 📞 เพื่อวางสาย"), true);
       else if (m.type === "error") { addChip("📞 " + m.text); liveStop(); }
       else if (m.type === "audio") {
         // 24k PCM16 → schedule back-to-back for smooth playback.
@@ -1907,7 +1974,7 @@
   // lands in the button's input box for you to review and send yourself.
   function wireMic(btn, input) {
     if (!btn) return;
-    btn.title = "🎤 คลิกเพื่อพูด — คลิกอีกครั้งเพื่อหยุด (ข้อความลงช่องพิมพ์)";
+    btn.title = tr("🎤 คลิกเพื่อพูด — คลิกอีกครั้งเพื่อหยุด (ข้อความลงช่องพิมพ์)");
     btn.onclick = async (e) => {
       e.preventDefault();
       if (btn.classList.contains("rec")) {
@@ -1923,7 +1990,7 @@
             input.focus();
           }
         }
-      } else if (await voiceBegin("คลิก 🎤 อีกครั้งเพื่อหยุด")) {
+      } else if (await voiceBegin(tr("คลิก 🎤 อีกครั้งเพื่อหยุด"))) {
         btn.classList.add("rec");
       }
     };
@@ -1937,7 +2004,7 @@
   async function _pttSend() {
     const val = await voiceFinish();
     if (!val) return;
-    pillShow("🎤 " + val.slice(0, 90), "ส่งแล้ว ✓", false);
+    pillShow("🎤 " + val.slice(0, 90), tr("ส่งแล้ว ✓"), false);
     setTimeout(pillHide, 2400);
     // A spoken command is a REAL chat message: in normal mode the pane jumps to
     // the CEO seat and the words land as your bubble (with a voice badge); feed
@@ -1955,10 +2022,10 @@
     refreshThreadBar();
   }
   // Click the mic button = toggle (press to start, press to send).
-  window.pttToggle = () => { if (_rec) _pttSend(); else voiceBegin("กดอีกครั้ง / ปล่อยปุ่มเพื่อส่ง"); };
+  window.pttToggle = () => { if (_rec) _pttSend(); else voiceBegin(tr("กดอีกครั้ง / ปล่อยปุ่มเพื่อส่ง")); };
   // Hold-to-talk from the global hotkey: key DOWN starts, key UP sends.
   window.pttSet = (on) => {
-    if (on) { if (!_rec) voiceBegin("ปล่อยปุ่มเพื่อส่ง"); }
+    if (on) { if (!_rec) voiceBegin(tr("ปล่อยปุ่มเพื่อส่ง")); }
     else if (_rec) _pttSend();
   };
   // Tell the shell which chord to listen for (persisted per machine).
@@ -2025,13 +2092,13 @@
     return d;
   }
   function clearFeed() {
-    feedEl.innerHTML = `<div id="feedEmpty">— เงียบสงบ… รอความเคลื่อนไหวในออฟฟิศ —</div>`;
+    feedEl.innerHTML = `<div id="feedEmpty">${tr("— เงียบสงบ… รอความเคลื่อนไหวในออฟฟิศ —")}</div>`;
   }
   document.getElementById("feedClear").onclick = clearFeed;
   // Permission requests become ACTIONABLE cards right in the stream — the
   // same broker answers, no mode-switch needed to unblock an agent.
   function addFeedPerm(ev) {
-    const d = addFeed(ev.agent, "🛡 ขอใช้ " + ev.tool, ev.session || "", "alert");
+    const d = addFeed(ev.agent, tr("🛡 ขอใช้") + " " + ev.tool, ev.session || "", "alert");
     d.id = "fperm-" + ev.perm;
     let inp = "";
     try { inp = JSON.stringify(JSON.parse(ev.input)); } catch { inp = String(ev.input || ""); }
@@ -2043,9 +2110,9 @@
     }
     const row = document.createElement("div");
     row.className = "fpbtns";
-    row.innerHTML = `<button class="ok">✓ อนุญาต</button>` +
-      `<button class="ok" title="อนุญาต ${ev.tool} ให้ agent นี้ตลอดไป">✓✓ ตลอดไป</button>` +
-      `<button class="no">✗ ไม่</button>`;
+    row.innerHTML = `<button class="ok">✓ ${tr("อนุญาต")}</button>` +
+      `<button class="ok" title="${tr("อนุญาต")} ${ev.tool} ${tr("ตลอดไป")}">✓✓ ${tr("ตลอดไป")}</button>` +
+      `<button class="no">✗ ${tr("ไม่")}</button>`;
     const bt = row.querySelectorAll("button");
     bt[0].onclick = () => respondPerm(ev.perm, "allow");
     bt[1].onclick = () => respondPerm(ev.perm, "allow", true);
@@ -2191,23 +2258,23 @@
     if (ev.type === "chat.message") addFeed(ev.sub || ev.agent, ev.text, sess, ev.sub ? "ghostly" : "");
     else if (ev.type === "task.progress") addFeed(ev.agent, "⚙ " + (ev.tool || "…"), sess);
     else if (ev.type === "subagent.progress") addFeed(ev.sub, "⚙ " + (ev.tool || "…"), sess, "ghostly");
-    else if (ev.type === "subagent.spawned") addFeed(ev.sub, "👻 แตกร่างรับงาน: " + String(ev.text || "").slice(0, 80), sess, "ghostly");
-    else if (ev.type === "subagent.done") addFeed(ev.sub, ev.ok ? "✓ งานเสร็จ กลับเข้าร่าง" : "✗ ล้มเหลว", sess, "ghostly");
+    else if (ev.type === "subagent.spawned") addFeed(ev.sub, tr("👻 แตกร่างรับงาน:") + " " + String(ev.text || "").slice(0, 80), sess, "ghostly");
+    else if (ev.type === "subagent.done") addFeed(ev.sub, ev.ok ? tr("✓ งานเสร็จ กลับเข้าร่าง") : tr("✗ ล้มเหลว"), sess, "ghostly");
     else if (ev.type === "perm.requested") addFeedPerm(ev);
     else if (ev.type === "perm.approved") {
-      if (!resolveFeedPerm(ev.perm, ev.via === "rule" ? "✓ อนุญาตอัตโนมัติ (ตามสิทธิ์ที่ให้ไว้)" : "✓ อนุญาตแล้ว", true))
-        addFeed(ev.agent, "🛡 " + ev.tool + " — allowed ✓", sess);
+      if (!resolveFeedPerm(ev.perm, ev.via === "rule" ? tr("✓ อนุญาตอัตโนมัติ (ตามสิทธิ์ที่ให้ไว้)") : tr("✓ อนุญาตแล้ว"), true))
+        addFeed(ev.agent, "🛡 " + ev.tool + " — " + tr("อนุญาต") + " ✓", sess);
     } else if (ev.type === "perm.denied") {
-      if (!resolveFeedPerm(ev.perm, ev.via === "timeout" ? "✗ หมดเวลา — ปฏิเสธอัตโนมัติ" : "✗ ไม่อนุญาต", false))
-        addFeed(ev.agent, "🛡 " + ev.tool + " — denied ✗", sess);
+      if (!resolveFeedPerm(ev.perm, ev.via === "timeout" ? tr("✗ หมดเวลา — ปฏิเสธอัตโนมัติ") : tr("✗ ไม่อนุญาต"), false))
+        addFeed(ev.agent, "🛡 " + ev.tool + " — " + tr("ปฏิเสธ") + " ✗", sess);
     }
-    else if (ev.type === "task.completed") addFeed(ev.agent, "✓ งานเสร็จ", sess);
-    else if (ev.type === "task.failed") addFeed(ev.agent, "✗ งานล้มเหลว", sess);
-    else if (ev.type === "task.delegated") addFeed("main", "📋 มอบหมายงานให้ " + nameOf(ev.target), sess);
-    else if (ev.type === "ceo.summon") addFeed("main", "👑 เข้ารับคำสั่งจาก CEO", sess);
-    else if (ev.type === "ceo.report") addFeed("main", "📨 ส่งสรุปงานให้ CEO", sess);
-    else if (ev.type === "collab.started") addFeed((ev.agents || ["main"])[0], "🤝 ประชุมเริ่ม: " + String(ev.text || ""), sess);
-    else if (ev.type === "skill.created") addFeed(ev.agent, "📚 เรียนรู้สกิลใหม่: " + ev.skill, sess);
+    else if (ev.type === "task.completed") addFeed(ev.agent, tr("✓ งานเสร็จ"), sess);
+    else if (ev.type === "task.failed") addFeed(ev.agent, tr("✗ งานล้มเหลว"), sess);
+    else if (ev.type === "task.delegated") addFeed("main", tr("📋 มอบหมายงานให้") + " " + nameOf(ev.target), sess);
+    else if (ev.type === "ceo.summon") addFeed("main", tr("👑 เข้ารับคำสั่งจาก CEO"), sess);
+    else if (ev.type === "ceo.report") addFeed("main", tr("📨 ส่งสรุปงานให้ CEO"), sess);
+    else if (ev.type === "collab.started") addFeed((ev.agents || ["main"])[0], tr("🤝 ประชุมเริ่ม:") + " " + String(ev.text || ""), sess);
+    else if (ev.type === "skill.created") addFeed(ev.agent, tr("📚 เรียนรู้สกิลใหม่:") + " " + ev.skill, sess);
     // Plugins changed anywhere (this window, another, the Hub, an agent) → keep the open
     // Plugins panel in sync so it never shows a stale installed/removed state.
     else if (ev.type === "plugins.changed") {
@@ -2224,7 +2291,7 @@
     else if (ev.type === "proposal.approved") markProposalResolved(ev.proposal, true);
     else if (ev.type === "proposal.rejected") markProposalResolved(ev.proposal, false);
     else if (ev.type === "memory.learned")
-      addFeed(ev.agent, "🧠 จดความจำใหม่ " + ev.count + " ข้อ", "");
+      addFeed(ev.agent, tr("🧠 จดความจำใหม่") + " " + ev.count + " " + tr("ข้อ"), "");
     else if (ev.type === "plugin.intent" && ev.repo) {
       // A bagidea:// "install" deep link reached the office. Open the Plugins Hub
       // window pre-loaded with this repo for a CONFIRM-then-install — never silent.
@@ -2243,7 +2310,7 @@
       `<pre>${input.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]))}</pre>` +
       `<div class="row"><button class="allow">✓ Allow</button>` +
       `<button class="allow" style="border-color:#4ade80;color:#4ade80" ` +
-      `title="อนุญาต ${ev.tool} ให้ agent นี้ตลอดไป — ไม่ถามซ้ำอีก">✓✓ ตลอดไป</button>` +
+      `title="${tr("อนุญาต")} ${ev.tool} ${tr("ตลอดไป")}">✓✓ ${tr("ตลอดไป")}</button>` +
       `<button class="deny">✗ Deny</button></div>`;
     const btns = d.querySelectorAll("button");
     btns[0].onclick = () => respondPerm(ev.perm, "allow");
@@ -2258,11 +2325,11 @@
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, decision, always }),
     });
-    if (r.ok && always) addChip("🛡 จำสิทธิ์แล้ว — เครื่องมือนี้จะไม่ถามซ้ำสำหรับ agent นี้");
+    if (r.ok && always) addChip(tr("🛡 จำสิทธิ์แล้ว — เครื่องมือนี้จะไม่ถามซ้ำสำหรับ agent นี้"));
     if (!r.ok) {
       // Stale card (daemon restarted / request already timed out) — clean up.
       removePermCard(id);
-      addChip("🛡 การ์ดนี้หมดอายุไปแล้ว (คำขอถูกปิดไปก่อนหน้า)");
+      addChip(tr("🛡 การ์ดนี้หมดอายุไปแล้ว (คำขอถูกปิดไปก่อนหน้า)"));
     }
   }
   function removePermCard(id) {
@@ -2975,10 +3042,10 @@
       if (scEl) scEl.textContent = `${nStaff} / ${MAXSTAFF} agents`;
       const hireBtn = modalCard.querySelector("#newAgent");
       hireBtn.onclick = () => {
-        if (nStaff >= MAXSTAFF) return addChip(`ออฟฟิศเต็มแล้ว — สูงสุด ${MAXSTAFF} คน (ใช้การแตกร่างผีสำหรับงานขนาน)`);
+        if (nStaff >= MAXSTAFF) return addChip(`${tr("ออฟฟิศเต็มแล้ว — สูงสุด")} ${MAXSTAFF} ${tr("คน (ใช้การแตกร่างผีสำหรับงานขนาน)")}`);
         openEditor(null);
       };
-      if (nStaff >= MAXSTAFF) { hireBtn.classList.add("nokey"); hireBtn.textContent = `ออฟฟิศเต็ม (${nStaff}/${MAXSTAFF})`; }
+      if (nStaff >= MAXSTAFF) { hireBtn.classList.add("nokey"); hireBtn.textContent = `${tr("ออฟฟิศเต็ม")} (${nStaff}/${MAXSTAFF})`; }
       // 🪟 Start with Windows — reflects the live HKCU Run key (tray-synced).
       const startupSw = modalCard.querySelector("#startupSw");
       if (startupSw) {
@@ -2988,8 +3055,8 @@
           try {
             const r = await api("/startup", { on });
             e.currentTarget.classList.toggle("on", !!r.on);
-            addChip(on ? "🚀 จะเปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ" : "ปิดการเปิดอัตโนมัติแล้ว");
-          } catch { addChip("✗ ตั้งค่าไม่สำเร็จ"); }
+            addChip(on ? tr("🚀 จะเปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ") : tr("ปิดการเปิดอัตโนมัติแล้ว"));
+          } catch { addChip(tr("✗ ตั้งค่าไม่สำเร็จ")); }
         };
       }
       modalCard.querySelector("#updSw").onclick = async (e) => {
@@ -3397,8 +3464,8 @@
       });
       modalCard.querySelector("#eVoicePlay").onclick = async (e) => {
         const pid = vSel.value;
-        if (!pid) return addChip("เลือกเสียงก่อนนะ");
-        if (!FEATURES.tts) return addChip("🗣 เสียงพูดต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT");
+        if (!pid) return addChip(tr("เลือกเสียงก่อนนะ"));
+        if (!FEATURES.tts) return addChip(tr("🗣 เสียงพูดต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT"));
         const btn = e.currentTarget;
         btn.textContent = "⏳";
         try {
@@ -3816,7 +3883,7 @@
   // 🎨 opens the full standalone 3D editor window (the daemon launches Godot).
   document.getElementById("editBtn").onclick = () => {
     api("/editor/open", {});
-    addChip("🎨 กำลังเปิด 3D Editor (หน้าต่างแยก)… จัดของเสร็จกดบันทึก แล้ววอลเปเปอร์อัปเดตทันที");
+    addChip(tr("🎨 กำลังเปิด 3D Editor (หน้าต่างแยก)… จัดของเสร็จกดบันทึก แล้ววอลเปเปอร์อัปเดตทันที"));
   };
   async function openPlugins() {
     modal.classList.add("open");
@@ -3879,11 +3946,11 @@
     modalCard.querySelector("#plgReload").onclick = () =>
       api("/plugins/reload", {}).then(() => openPlugins());
     const doInstall = async (url, mode) => {
-      addChip("📦 กำลังติดตั้ง plugin…");
+      addChip(tr("📦 กำลังติดตั้ง plugin…"));
       const r2 = await fetch("/plugins/install", { method: "POST",
         headers: { "content-type": "application/json", "x-bagidea-ui": "1" },
         body: JSON.stringify({ url, mode: mode || "" }) });
-      if (r2.ok) { addChip("✅ ติดตั้ง plugin แล้ว"); openPlugins(); return; }
+      if (r2.ok) { addChip(tr("✅ ติดตั้ง plugin แล้ว")); openPlugins(); return; }
       if (r2.status === 409) {   // already installed → overwrite or new copy?
         const j = await r2.json().catch(() => ({}));
         const choice = await dupChoice(j.id || "");
@@ -4007,7 +4074,7 @@
     modalCard.querySelector("#edClear").onclick = () => { EDIT.items = []; EDIT.sel = -1; edRender(); };
     modalCard.querySelector("#edSave").onclick = async () => {
       await api("/layout", { items: EDIT.items });
-      addChip("🎨 บันทึกผังออฟฟิศแล้ว — โลกอัปเดตทันที");
+      addChip(tr("🎨 บันทึกผังออฟฟิศแล้ว — โลกอัปเดตทันที"));
       closeModal();
     };
     edRender();
@@ -4022,7 +4089,7 @@
       const up = await fetch("/upload", { method: "POST",
         headers: { "x-file-name": encodeURIComponent(f.name) }, body: f }).then((x) => x.json());
       EDIT.asset = up.path || up.url;
-      addChip("📎 พร้อมวาง: " + (up.name || f.name));
+      addChip(tr("📎 พร้อมวาง:") + " " + (up.name || f.name));
     };
     inp.click();
   }
@@ -4319,12 +4386,12 @@
               if (!armed) {
                 armed = true;
                 b[0].classList.add("arm");
-                b[0].textContent = "⏹ ยืนยันหยุด?";
-                setTimeout(() => { armed = false; b[0].classList.remove("arm"); b[0].textContent = "⏹ หยุด agent"; }, 4000);
+                b[0].textContent = tr("⏹ ยืนยันหยุด?");
+                setTimeout(() => { armed = false; b[0].classList.remove("arm"); b[0].textContent = tr("⏹ หยุด agent"); }, 4000);
                 return;
               }
               await api("/projects/stopwork", { id: p.id });
-              addChip("⏹ หยุดงาน agent แล้ว — เปิดโปรเจคเข้าไปทำต่อได้เลย");
+        addChip(tr("⏹ หยุดงาน agent แล้ว — เปิดโปรเจคเข้าไปทำต่อได้เลย"));
               refresh();
             };
           } else if (!p.open) {
@@ -4507,9 +4574,9 @@
           const b = card.querySelectorAll(".winbtn:not(.pinbtn)");
           const msgOf = () => (card.querySelector(".prMsg").value || "").trim();
           b[0].onclick = () => api("/proposals/respond", { id: p.id, decision: "approve", message: msgOf() })
-            .then(() => { addChip("✅ อนุมัติแล้ว — Director กำลังจัดทีม"); openOps("jobs"); });
+            .then(() => { addChip(tr("✅ อนุมัติแล้ว — Director กำลังจัดทีม")); openOps("jobs"); });
           b[1].onclick = () => api("/proposals/respond", { id: p.id, decision: "reject", message: msgOf() })
-            .then(() => { addChip("ส่งคำตอบให้ทีมแล้ว"); openOps("jobs"); });
+            .then(() => { addChip(tr("ส่งคำตอบให้ทีมแล้ว")); openOps("jobs"); });
           const chk = card.querySelector(".prChk");
           chk.onchange = () => { chk.checked ? selected.add(p.id) : selected.delete(p.id); syncSelBtn(); };
           box.appendChild(card);
@@ -4751,7 +4818,7 @@
       fetch("/office-md").then((x) => x.text()).then((t) => { if (ta) ta.value = t; });
       modalCard.querySelector("#officeSave").onclick = async () => {
         await api("/office-md", { text: ta.value });
-        addChip("🏛 บันทึก OFFICE.md แล้ว — agents เห็นเวอร์ชันใหม่ใน session ถัดไป");
+        addChip(tr("🏛 บันทึก OFFICE.md แล้ว — agents เห็นเวอร์ชันใหม่ใน session ถัดไป"));
         closeModal();
       };
     } else {
@@ -4829,8 +4896,8 @@
     groupView = key;
     setThreadLabel((bucket === "@sub" ? "👻 " : "🗣 ") + title);
     document.getElementById("inp").placeholder = bucket === "@sub"
-      ? "งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย"
-      : "บันทึกการประชุม (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย";
+      ? tr("งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย")
+      : tr("บันทึกการประชุม (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย");
     log.innerHTML = "";
     try {
       const r = await fetch(`/sessions/log?agent=${encodeURIComponent(bucket)}&key=${encodeURIComponent(key)}`)
@@ -4871,14 +4938,14 @@
       CUR[target] = null;
       log.innerHTML = "";
       setThreadCtx(null);
-      return setThreadLabel("🆕 thread ใหม่ — เริ่มเมื่อส่งข้อความแรก");
+      return setThreadLabel(tr("🆕 thread ใหม่ — เริ่มเมื่อส่งข้อความแรก"));
     }
     try {
       const r = await fetch(`/sessions?agent=${encodeURIComponent(sessAgent())}`).then((x) => x.json());
       const list = r.sessions || [];
       let cur = SESS[target] ? list.find((s) => s.key === SESS[target]) : null;
       if (!cur) cur = list[0];
-      setThreadLabel((cur ? cur.title : "ยังไม่มี — จะสร้างให้เองเมื่อคุยครั้งแรก") +
+      setThreadLabel((cur ? cur.title : tr("ยังไม่มี — จะสร้างให้เองเมื่อคุยครั้งแรก")) +
         (cur && cur.proj ? " · 📁" : ""));
       setThreadCtx(cur && cur.lastUsage);   // restore the saved usage meter on reopen
       const key = cur ? cur.key : null;
@@ -4886,7 +4953,7 @@
         CUR[target] = key;
         await loadThreadLog(key);
       }
-    } catch { setThreadLabel("ล่าสุด"); }
+    } catch { setThreadLabel(tr("ล่าสุด")); }
   }
 
   document.getElementById("sessBtn").onclick = async (e) => {
@@ -4906,16 +4973,16 @@
       o.onclick = () => { onpick(); m.classList.remove("open"); refreshThreadBar(); };
       m.appendChild(o);
     };
-    mk("🆕 เริ่ม thread ใหม่", "ความจำใหม่ ไม่ต่อจากของเดิม", "new",
+    mk(tr("🆕 เริ่ม thread ใหม่"), tr("ความจำใหม่ ไม่ต่อจากของเดิม"), "new",
       SESS[target] === "new",
-      () => { groupView = null; SESS[target] = "new"; addChip(`🧵 เริ่ม thread ใหม่กับ <b>${nameOf(target)}</b>`); });
+      () => { groupView = null; SESS[target] = "new"; addChip(`${tr("🧵 เริ่ม thread ใหม่กับ")} <b>${nameOf(target)}</b>`); });
     for (const s of list)
       mk(`🧵 ${s.title || s.key}`, new Date(s.ts).toLocaleString(), s.key,
         !groupView && SESS[target] !== "new" && s.key === activeKey,
         () => { groupView = null; CUR[target] = null; SESS[target] = s.key;
-          addChip(`🧵 สลับไป thread: <b>${(s.title || s.key).slice(0, 40)}</b>`); });
+          addChip(`${tr("🧵 สลับไป thread:")} <b>${(s.title || s.key).slice(0, 40)}</b>`); });
     if (!list.length && SESS[target] !== "new")
-      mk("(ยังไม่มี thread เก่า — คุยครั้งแรกจะสร้างให้เอง)", "", undefined, false, () => {});
+      mk(tr("(ยังไม่มี thread เก่า — คุยครั้งแรกจะสร้างให้เอง)"), "", undefined, false, () => {});
     // 🗣 group sessions: every meeting, readable any time
     try {
       const g = await fetch(`/sessions?agent=${encodeURIComponent("@group")}`).then((x) => x.json());
@@ -4926,7 +4993,7 @@
         hd.style.cursor = "default";
         hd.style.color = "var(--dim)";
         hd.style.fontSize = "10.5px";
-        hd.textContent = "—  🗣 การประชุม  —";
+        hd.textContent = tr("—  🗣 การประชุม  —");
         m.appendChild(hd);
         for (const s of meets) {
           const o = document.createElement("div");
@@ -4975,8 +5042,8 @@
           sub.style.display = "block";
           sub.style.color = "var(--dim)";
           sub.style.fontSize = "10px";
-          sub.textContent = `ร่างแยกของ ${nameOf(s.parent)} · ` +
-            (s.ok === false ? "✗ ล้มเหลว" : s.ok ? "✓ สำเร็จ" : "⏳ กำลังทำ") +
+          sub.textContent = `${tr("ร่างแยกของ")} ${nameOf(s.parent)} · ` +
+            (s.ok === false ? tr("✗ ล้มเหลว") : s.ok ? tr("✓ สำเร็จ") : tr("⏳ กำลังทำ")) +
             ` · ${new Date(s.ts).toLocaleString()}`;
           o.append(top, sub);
           o.onclick = () => { m.classList.remove("open");
@@ -5029,25 +5096,91 @@
       await api("/discuss", { agents: [...picked], topic,
         rounds: Number(modalCard.querySelector("#dRounds").value) });
       closeModal();
-      addChip(`🗣 meeting started: <b>${topic.slice(0, 50)}</b>`);
+      addChip(`${tr("🤝 ประชุมเริ่ม:")} <b>${topic.slice(0, 50)}</b>`);
     };
   }
 
   // ---- top-down map ---------------------------------------------------------
   // World→map transform; must match the ortho render in office_floor.gd.
   const MAP = { x0: -16.9, w: 33.8, z0: -13.0, d: 26.0 };
+  const SEASONS = [
+    ["spring", "🌸 Spring"],
+    ["summer", "☀️ Summer"],
+    ["autumn", "🍂 Autumn"],
+    ["winter", "❄️ Winter"],
+  ];
+  const WEATHER_BY_SEASON = {
+    spring: [["sunny", "Sunny"], ["light_rain", "Light rain"]],
+    summer: [["sunny", "Sunny"], ["light_rain", "Light rain"], ["storm", "Storm"]],
+    autumn: [["sunny", "Sunny"], ["light_rain", "Light rain"]],
+    winter: [["sunny", "Sunny"], ["snow", "Snow"]],
+  };
+  let seasonOffset = 0;
+  let weatherOffset = 0;
   let mapOpen = false, lastPos = [];
   document.getElementById("mapBtn").onclick = () => openMap();
+
+  function seasonNow() {
+    return SEASONS[(Math.floor(new Date().getHours() / 2) + seasonOffset) % SEASONS.length];
+  }
+
+  function weatherNow() {
+    const season = seasonNow()[0];
+    const opts = WEATHER_BY_SEASON[season] || WEATHER_BY_SEASON.spring;
+    const slot = Math.floor(Date.now() / 3600000);
+    const base = Math.abs(Math.imul(slot ^ (season.length * 131), 1103515245) + 12345);
+    return { season, opts, cur: opts[(base + weatherOffset) % opts.length] };
+  }
 
   function openMap() {
     modal.classList.add("open");
     mapOpen = true;
     modalCard.innerHTML = hdr("🗺 OFFICE MAP — click an agent to chat") +
-      `<div id="mapWrap"><img id="mapImg" src="/map/bg?t=${Date.now()}"
+      `<div class="btnrow" id="seasonRow" style="margin-bottom:8px;align-items:center">
+         <button id="seasonBtn" class="primary" style="flex:0 0 auto"></button>
+         <button id="weatherBtn" style="flex:0 0 auto"></button>
+         <span class="meta">season every 2h · weather hourly</span>
+       </div>
+       <div id="mapWrap"><img id="mapImg" src="/map/bg?t=${Date.now()}"
           onerror="this.style.minHeight='320px'">
         <div id="mapIcons" style="position:absolute;inset:0"></div></div>`;
+    renderSeasonButton();
+    renderWeatherButton();
     renderMapIcons();
   }
+
+  function renderSeasonButton() {
+    const b = document.getElementById("seasonBtn");
+    if (!b) return;
+    const cur = seasonNow();
+    const next = SEASONS[(SEASONS.findIndex((s) => s[0] === cur[0]) + 1) % SEASONS.length];
+    b.textContent = `${cur[1]} → ${next[1]}`;
+    b.title = "Switch office season";
+    b.onclick = async () => {
+      const r = await api("/ui/season", { step: 1 });
+      if (typeof r.offset === "number") seasonOffset = r.offset;
+      renderSeasonButton();
+      renderWeatherButton();
+    };
+  }
+
+  function renderWeatherButton() {
+    const b = document.getElementById("weatherBtn");
+    if (!b) return;
+    const w = weatherNow();
+    const ix = w.opts.findIndex((x) => x[0] === w.cur[0]);
+    const next = w.opts[(ix + 1) % w.opts.length];
+    b.textContent = `Weather: ${w.cur[1]} → ${next[1]}`;
+    b.title = "Switch office weather";
+    b.onclick = async () => {
+      const r = await api("/ui/weather", { step: 1 });
+      if (typeof r.offset === "number") weatherOffset = r.offset;
+      renderWeatherButton();
+    };
+  }
+  setInterval(() => {
+    if (mapOpen) { renderSeasonButton(); renderWeatherButton(); }
+  }, 60000);
 
   function renderMapIcons() {
     if (!mapOpen) return;
@@ -5183,11 +5316,11 @@
     const pid = String(ev.agent || subId).split("#")[0];
     const tag = subId.includes("#") ? subId.split("#")[1].toUpperCase() : "SUB";
     const gname = `${nameOf(pid)} · ${tag}`;
-    if (ev.replay) return;
-    if (ev.type === "subagent.spawned")
-      addLog(`👻 <b>${gname}</b> แตกร่างขึ้น Ghost Deck — ${String(ev.text || "").slice(0, 60)}`);
-    else if (ev.type === "subagent.done")
-      addLog(`👻 <b>${gname}</b> ${ev.ok ? "งานเสร็จ ✓ กลับเข้าร่าง" : "ล้มเหลว ✗ กลับเข้าร่าง"}`);
+	    if (ev.replay) return;
+	    if (ev.type === "subagent.spawned")
+	      addLog(`👻 <b>${gname}</b> ${tr("แตกร่างขึ้น Ghost Deck")} — ${String(ev.text || "").slice(0, 60)}`);
+	    else if (ev.type === "subagent.done")
+	      addLog(`👻 <b>${gname}</b> ${tr(ev.ok ? "งานเสร็จ ✓ กลับเข้าร่าง" : "ล้มเหลว ✗ กลับเข้าร่าง")}`);
     else if (ev.type === "subagent.progress") {
       addLog(`⚙ <b>${ev.tool || "…"}</b> — 👻 ${gname}`);
       if (groupView && ev.session === groupView) addToolRow(ev.tool || "…");
@@ -5198,18 +5331,28 @@
     else if (ev.type === "perm.requested") addPermCard({ ...ev, agent: gname });
     else if (ev.type === "perm.approved" || ev.type === "perm.denied") {
       removePermCard(ev.perm);
-      addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? "allowed" : "denied"}</b> (👻 ${gname})`);
+	      addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? tr("อนุญาต") : tr("ปฏิเสธ")}</b> (👻 ${gname})`);
     }
   }
 
   // ---- event routing --------------------------------------------------------
   function route(ev) {
-    if (ev.type === "world.pos") {
-      lastPos = ev.agents || [];
-      if (mapOpen) renderMapIcons();
-      return;
-    }
-    if (ev.type === "ui.mapbg") {
+	    if (ev.type === "world.pos") {
+	      lastPos = ev.agents || [];
+	      if (mapOpen) renderMapIcons();
+	      return;
+	    }
+	    if (ev.type === "ui.season") {
+	      if (typeof ev.offset === "number") seasonOffset = ev.offset;
+	      if (mapOpen) { renderSeasonButton(); renderWeatherButton(); }
+	      return;
+	    }
+	    if (ev.type === "ui.weather") {
+	      if (typeof ev.offset === "number") weatherOffset = ev.offset;
+	      if (mapOpen) renderWeatherButton();
+	      return;
+	    }
+	    if (ev.type === "ui.mapbg") {
       const im = document.getElementById("mapImg");
       if (im) im.src = "/map/bg?t=" + Date.now();
       return;
@@ -5232,10 +5375,12 @@
       REGMCP = ev.mcp || {};
       AUTOSKILLS = ev.autoSkills !== false;
       VERIFY = ev.verifyDelegated === true;
-      SOUND = ev.sound !== false;
-      if (typeof ev.monitor === "number") monMode = ev.monitor;
-      if (typeof ev.monitors === "number") monCount = Math.max(1, ev.monitors);
-      try { refreshDispVisibility(); } catch {}
+	      SOUND = ev.sound !== false;
+	      if (typeof ev.monitor === "number") monMode = ev.monitor;
+	      if (typeof ev.monitors === "number") monCount = Math.max(1, ev.monitors);
+	      if (typeof ev.seasonOffset === "number") seasonOffset = ev.seasonOffset;
+	      if (typeof ev.weatherOffset === "number") weatherOffset = ev.weatherOffset;
+	      try { refreshDispVisibility(); } catch {}
       HEARTBEAT = Number(ev.heartbeatMin || 0);
       if (ev.features) FEATURES = ev.features;
       TTSON = ev.tts !== false;
@@ -5316,7 +5461,7 @@
       document.getElementById("updSha").textContent = ver ? "v" + ver : "";
       bar.classList.add("on");
       bar.onclick = async () => {
-        bar.textContent = "⏳ กำลังอัปเดต… โปรแกรมจะปิดและเปิดใหม่เอง (มีหน้าต่างอัปเดตเด้งขึ้นมา)";
+	        bar.textContent = tr("⏳ กำลังอัปเดต… โปรแกรมจะปิดและเปิดใหม่เอง (มีหน้าต่างอัปเดตเด้งขึ้นมา)");
         await api("/update", {});
         // If the updater took over, this page is gone before the timer fires.
         // If we're STILL here after 45s, it didn't start — un-stick the banner.
@@ -5325,12 +5470,12 @@
             const h = await fetch("/health");
             if (h && h.ok) {
               bar.classList.add("on");
-              bar.innerHTML = "⚠️ อัปเดตยังไม่เริ่ม — เปิด Terminal แล้วรัน <b>bagidea update</b> (หรือคลิกที่นี่เพื่อลองอีกครั้ง)";
+	              bar.innerHTML = `${tr("⚠️ อัปเดตยังไม่เริ่ม — เปิด Terminal แล้วรัน")} <b>bagidea update</b> ${tr("(หรือคลิกที่นี่เพื่อลองอีกครั้ง)")}`;
             }
           } catch {}
         }, 45000);
       };
-      addFeed("main", "🔄 มีเวอร์ชันใหม่ " + (ver ? "v" + ver : "") + " — อัปเดตได้จากแถบในหน้าแชท หรือ `bagidea update`", "");
+	      addFeed("main", tr("🔄 มีเวอร์ชันใหม่") + " " + (ver ? "v" + ver : "") + " " + tr("— อัปเดตได้จากแถบในหน้าแชท หรือ `bagidea update`"), "");
       return;
     }
     if (ev.type === "ui.daylight") {
@@ -5352,7 +5497,7 @@
     const subId = ev.sub || (ev.agent && String(ev.agent).includes("#") ? ev.agent : null);
     if (subId) return routeSub(ev, subId);
     if (ev.type === "subagent.split") {
-      if (!ev.replay) addLog(`👻 <b>${nameOf(ev.agent)}</b> แตกร่าง ${ev.count} sub-agents → Ghost Deck`);
+	      if (!ev.replay) addLog(`👻 <b>${nameOf(ev.agent)}</b> ${tr("แตกร่าง")} ${ev.count} ${tr("sub-agents → Ghost Deck")}`);
       return;
     }
     if (ev.agent && isRosterAgent(ev.agent)) ensureAgent(ev.agent);
@@ -5432,48 +5577,48 @@
       removePermCard(ev.perm);
       if (missions[key]) { missions[key].state = "running"; renderMissions(); }
       ensureAgent(ev.agent, "working");
-      if (!ev.replay) addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? "allowed" : "denied"}</b> (${nameOf(ev.agent)})`);
+	      if (!ev.replay) addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? tr("อนุญาต") : tr("ปฏิเสธ")}</b> (${nameOf(ev.agent)})`);
     }
     else if (ev.type === "ceo.summon") {
       // Direct feedback in the CEO pane (you just gave the order) — log otherwise.
       if (!ev.replay) {
-        addLog(`👑 CEO เรียก <b>${nameOf("main")}</b> เข้ารับคำสั่ง`);
-        if (target === "ceo") addChip(`👑 <b>${nameOf("main")}</b> กำลังเดินมารับคำสั่ง…`);
+	        addLog(`${tr("👑 CEO เรียก")} <b>${nameOf("main")}</b> ${tr("👑 เข้ารับคำสั่งจาก CEO").replace(/^👑\s*/, "")}`);
+	        if (target === "ceo") addChip(`👑 <b>${nameOf("main")}</b> ${tr("เดินมารับคำสั่ง")}…`);
       }
     }
     else if (ev.type === "task.delegated") {
       if (!ev.replay) {
-        addLog(`📋 <b>${nameOf("main")}</b> มอบหมายงานให้ <b>${nameOf(ev.target)}</b>`);
-        if (target === "ceo") addChip(`📋 มอบหมายงานให้ <b>${nameOf(ev.target)}</b>`);
+	        addLog(`📋 <b>${nameOf("main")}</b> ${tr("📋 มอบหมายงานให้").replace(/^📋\s*/, "")} <b>${nameOf(ev.target)}</b>`);
+	        if (target === "ceo") addChip(`${tr("📋 มอบหมายงานให้")} <b>${nameOf(ev.target)}</b>`);
       }
     }
     else if (ev.type === "ceo.report") {
       if (!ev.replay) {
-        addLog(`📨 <b>${nameOf("main")}</b> ส่งสรุปงานให้ CEO`);
-        if (target === "ceo") addChip(`📨 <b>${nameOf("main")}</b> เดินมาส่งสรุปงานแล้ว ↑`);
+	        addLog(`📨 <b>${nameOf("main")}</b> ${tr("📨 ส่งสรุปงานให้ CEO").replace(/^📨\s*/, "")}`);
+	        if (target === "ceo") addChip(`📨 <b>${nameOf("main")}</b> ${tr("เดินมาส่งสรุปงานแล้ว ↑")}`);
       }
     }
     else if (ev.type === "reminder") {
       if (!ev.replay) {
-        addChip(`🔔 <b>เตือนนัด:</b> ${String(ev.text).replace(/</g, "&lt;")} (${new Date(ev.at).toLocaleTimeString()})`);
-        addLog(`🔔 เตือนนัด: <b>${String(ev.text).replace(/</g, "&lt;")}</b>`);
+	        addChip(`<b>${tr("🔔 เตือนนัด:")}</b> ${String(ev.text).replace(/</g, "&lt;")} (${new Date(ev.at).toLocaleTimeString()})`);
+	        addLog(`${tr("🔔 เตือนนัด:")} <b>${String(ev.text).replace(/</g, "&lt;")}</b>`);
         uiSnd("alert");
       }
     }
     else if (ev.type === "job.started") {
-      if (!ev.replay) addLog(`📋 เริ่มงานที่สั่งไว้: <b>${String(ev.title || "").replace(/</g, "&lt;")}</b> — ${nameOf(ev.agent)}`);
+	      if (!ev.replay) addLog(`${tr("📋 เริ่มงานที่สั่งไว้:")} <b>${String(ev.title || "").replace(/</g, "&lt;")}</b> — ${nameOf(ev.agent)}`);
     }
     else if (ev.type === "notes.changed") {
-      if (!ev.replay && ev.by === "agent") addLog(`📝 มี agent เขียนโน้ตบนกระดาน (${ev.count} ข้อ)`);
+	      if (!ev.replay && ev.by === "agent") addLog(`${tr("มี agent เขียนโน้ตบนกระดาน")} (${ev.count} ${tr("ข้อ")})`);
     }
     else if (ev.type === "collab.started") {
-      if (!ev.replay) addLog(`🤝 ประชุมเริ่ม — ${(ev.agents || []).map(nameOf).join(", ")}`);
+	      if (!ev.replay) addLog(`${tr("🤝 ประชุมเริ่ม —")} ${(ev.agents || []).map(nameOf).join(", ")}`);
     }
     else if (ev.type === "collab.ended") {
-      if (!ev.replay) addLog(`🤝 ประชุมจบ`);
+	      if (!ev.replay) addLog(tr("🤝 ประชุมจบ"));
     }
     else if (ev.type === "skill.created") {
-      if (!ev.replay) addLog(`📚 <b>${nameOf(ev.agent)}</b> learned a new skill: <b>${ev.skill}</b>`);
+	      if (!ev.replay) addLog(`${tr("📚 เรียนรู้สกิลใหม่:")} <b>${nameOf(ev.agent)}</b> · <b>${ev.skill}</b>`);
     }
     else if (ev.type === "agent.online") ensureAgent(ev.agent, "idle");
     else if (ev.type === "agent.offline") ensureAgent(ev.agent, "offline");
@@ -5521,7 +5666,7 @@
           PENDING_FILES = PENDING_FILES.filter((x) => x !== j);
           chip.remove();
         };
-        chip.title = "คลิกเพื่อเอาออก";
+        chip.title = tr("คลิกเพื่อเอาออก");
       } catch (e) {
         chip.textContent = "✗ " + f.name;
         setTimeout(() => chip.remove(), 2500);
@@ -5550,7 +5695,7 @@
       _lbEl.appendChild(_lbImg);
       _lbOpen = document.createElement("button");
       _lbOpen.id = "lbOpen";
-      _lbOpen.textContent = "⤢ เปิดในหน้าต่างใหม่";
+      _lbOpen.textContent = "⤢ " + tr("เปิดเป็นหน้าต่างใหม่");
       _lbOpen.onclick = (e) => { e.stopPropagation(); if (_lbPath) openExternal(_lbPath); };
       _lbEl.appendChild(_lbOpen);
       const close = () => { _lbEl.style.display = "none"; _lbImg.src = ""; };
@@ -5590,7 +5735,7 @@
     if (kind === "image") {
       el = document.createElement("img");
       el.src = url; el.loading = "lazy";
-      el.title = "คลิกเพื่อดูภาพ · ปุ่ม ⤢ เปิดเป็นหน้าต่างใหม่";
+      el.title = tr("คลิกเพื่อดูภาพ · ปุ่ม ⤢ เปิดเป็นหน้าต่างใหม่");
       el.onclick = () => openLightbox(url, realPath);
     } else if (kind === "video") {
       el = document.createElement("video");
@@ -5610,12 +5755,12 @@
     wrap.appendChild(el);
     const fb = document.createElement("button");
     fb.className = "revealbtn";
-    fb.title = "เปิดโฟลเดอร์ที่เก็บไฟล์";
+    fb.title = tr("เปิดโฟลเดอร์ที่เก็บไฟล์");
     fb.textContent = "📂";
     fb.onclick = (e) => { e.stopPropagation(); revealInFolder(realPath); };
     const ob = document.createElement("button");
     ob.className = "revealbtn openbtn";
-    ob.title = "เปิดเป็นหน้าต่างใหม่ (โปรแกรมดูไฟล์ของเครื่อง)";
+    ob.title = tr("เปิดเป็นหน้าต่างใหม่ (โปรแกรมดูไฟล์ของเครื่อง)");
     ob.textContent = "⤢";
     ob.onclick = (e) => { e.stopPropagation(); openExternal(realPath); };
     wrap.appendChild(ob);
@@ -5642,13 +5787,13 @@
     document.getElementById("attachRow").innerHTML = "";
     if (!prompt && !files.length) return;
     if (groupView) {
-      addChip("📖 กำลังดูบันทึกย้อนหลัง (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย");
+      addChip(tr("📖 กำลังดูบันทึกย้อนหลัง (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย"));
       return;
     }
     inp.value = "";
     inp.style.height = "auto";  // collapse the grown textarea back to one row
     uiSnd("send");
-    const d = addMsg("you", null, prompt || "(ส่งไฟล์แนบ)");
+    const d = addMsg("you", null, prompt || tr("(ส่งไฟล์แนบ)"));
     for (const f of files) d.appendChild(mediaNode(f.url, f.kind, f.name, f.path || f.url));
     showTyping();  // instant feedback while the agent spins up (no more dead silence)
     if (files.length) {
@@ -5697,7 +5842,9 @@
       if (e.button === 0 && !e.target.closest("button") && !e.target.closest(".winbtn"))
         shellPost("drag-overlay");
     });
+    const fullBtn = document.getElementById("fullBtn");
     const miniBtn = document.getElementById("miniBtn");
+    fullBtn.onclick = () => shellPost("fullscreen");
     miniBtn.onclick = () => shellPost("mini");
     document.getElementById("hideBtn").onclick = () => shellPost("hide");
     // The ◱/⛶ glyphs DON'T render on Windows 10 (no font coverage) — the restore
@@ -5706,6 +5853,14 @@
     // mini-mode CSS uses: ICON_MINI when full (action: shrink), ICON_RESTORE when mini.
     const ICON_MINI = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1.6"/><rect x="2.5" y="9" width="6" height="4.5" rx="1" fill="currentColor" stroke="none"/></svg>';
     const ICON_RESTORE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.3H3.3V6M10 3.3h2.7V6M6 12.7H3.3V10M10 12.7h2.7V10"/></svg>';
+    const ICON_FULL = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.7H2.7V6M10 2.7h3.3V6M6 13.3H2.7V10M10 13.3h3.3V10"/></svg>';
+    const ICON_UNFULL = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 6h3.1V2.9M13.2 6h-3.1V2.9M2.8 10h3.1v3.1M13.2 10h-3.1v3.1"/></svg>';
+    window.setFullscreenMode = (on) => {
+      document.body.classList.toggle("fullscreen", !!on);
+      fullBtn.innerHTML = on ? ICON_UNFULL : ICON_FULL;
+      fullBtn.title = on ? "Restore chat window" : "Fullscreen chat";
+    };
+    window.setFullscreenMode(false);
     const syncMiniBtn = () => {
       const small = _miniMQ.matches;   // mini window is ≤480px wide / ≤460px tall
       miniBtn.innerHTML = small ? ICON_RESTORE : ICON_MINI;
@@ -5717,6 +5872,7 @@
     _miniMQ.addEventListener("change", syncMiniBtn);   // fires exactly on mini⇄full
   } else {
     // plain browser: the OS window has its own chrome
+    document.getElementById("fullBtn").style.display = "none";
     document.getElementById("miniBtn").style.display = "none";
     document.getElementById("hideBtn").style.display = "none";
     document.body.style.borderRadius = "0";

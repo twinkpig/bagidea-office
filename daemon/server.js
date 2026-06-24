@@ -254,6 +254,7 @@ function rosterEvt() {
     updateChecks: reg.updateChecks === true,
     maxStaff: MAX_STAFF, staffCount: staffCount(),
     lang: reg.lang || "en", daylight: reg.daylight ?? "auto",
+    seasonOffset: Number(reg.seasonOffset || 0), weatherOffset: Number(reg.weatherOffset || 0),
     monitor: reg.monitor || 0, monitors: monitorCount() };
 }
 
@@ -278,6 +279,22 @@ function triggerRestart() {
         { detached: true, stdio: "ignore", cwd: root }).unref();
     }
   } catch (e) { console.error("[restart]", e.message); }
+}
+
+function startWallpaperRepinWatchdog() {
+  if (process.platform !== "win32") return;
+  const ps1 = path.join(__dirname, "wallpaper-repin.ps1");
+  if (!fs.existsSync(ps1)) return;
+  try {
+    const psExe = path.join(process.env.SystemRoot || "C:\\Windows",
+      "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    console.log("[watchdog] launching wallpaper repin:", ps1);
+    spawn("cmd.exe",
+      ["/c", "start", "", "/min", psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1],
+      { detached: true, stdio: "ignore", windowsHide: true, cwd: __dirname }).unref();
+  } catch (e) {
+    console.error("[watchdog] wallpaper repin failed:", e && e.message || e);
+  }
 }
 
 // Structured persona → one compiled system prompt (editor v2 fields).
@@ -1142,11 +1159,11 @@ function createProject(name, place, pathArg) {
     return String(s).replace(/\/+$/, "").toLowerCase();
   };
   if (projects.some((x) => norm(x.dir) === norm(dir)))
-    throw new Error("โปรเจคนี้อยู่ในรายการแล้ว (path ซ้ำ)");
+    throw new Error("This project is already registered (duplicate path)");
   if (projects.some((x) => x.name.toLowerCase() === name.toLowerCase()))
-    throw new Error("มีโปรเจคชื่อนี้อยู่แล้ว — ห้ามลงทะเบียนซ้ำ");
+    throw new Error("A project with this name already exists — duplicate registration is not allowed");
   if (Object.values(reg.places).some((f) => norm(f) === norm(dir)))
-    throw new Error("path นี้คือโฟลเดอร์ของ place — โปรเจคต้องเป็นโฟลเดอร์ย่อยข้างใน");
+    throw new Error("This path is a place folder — a project must be a subfolder inside it");
   const existed = fs.existsSync(dir);
   fs.mkdirSync(dir, { recursive: true });
   ensureTrusted(dir);
@@ -1264,7 +1281,7 @@ function dispatchJob(job) {
   }
   agentBusy.add(job.agent);
   job.lastRun = Date.now();
-  job.running = true;  // drives the "กำลังทำงาน" state in the UI
+  job.running = true;  // drives the "working" state in the UI
   saveJobs();
   broadcast({ type: "job.started", agent: job.agent, title: job.prompt.slice(0, 60), job: job.id });
   broadcast({ type: "jobs.changed" }, false);
@@ -1274,7 +1291,7 @@ function dispatchJob(job) {
   const oneShot = job.mode === "now" || (job.mode === "at" && !job.daily);
   runClaude(job.agent, job.prompt, {
     session: job.sessionKey || "new",
-    logPrompt: "📋 [งานที่สั่งไว้] " + job.prompt,
+    logPrompt: "📋 [Scheduled job] " + job.prompt,
     onEntry: (key) => { job.sessionKey = key; saveJobs(); },
     onDone: () => {
       agentBusy.delete(job.agent);
@@ -1312,10 +1329,10 @@ function heartbeat() {
   lastHeartbeat = Date.now();
   const upcoming = cal.filter((c) => c.at > Date.now() && c.at < Date.now() + 12 * 3600000)
     .sort((a, b) => a.at - b.at).slice(0, 6)
-    .map((c) => `- ${c.title} @ ${new Date(c.at).toLocaleString("th-TH")}`).join("\n") || "(ว่าง)";
+    .map((c) => `- ${c.title} @ ${new Date(c.at).toLocaleString("th-TH")}`).join("\n") || "(empty)";
   const standing = jobs.filter((j) => !j.done && j.enabled !== false).slice(0, 8)
-    .map((j) => `- [${j.mode}] ${j.agent}: ${j.prompt.slice(0, 60)}`).join("\n") || "(ไม่มี)";
-  const board = notes.slice(-8).map((n) => `- ${n.text}`).join("\n") || "(ว่าง)";
+    .map((j) => `- [${j.mode}] ${j.agent}: ${j.prompt.slice(0, 60)}`).join("\n") || "(none)";
+  const board = notes.slice(-8).map((n) => `- ${n.text}`).join("\n") || "(empty)";
   // Nothing the Director reports on (calendar / jobs / notes) has changed since
   // his last pass → he'd just say "OK" again. Skip the spawn entirely.
   const sig = `${upcoming}${standing}${board}`;
@@ -1328,7 +1345,7 @@ function heartbeat() {
     `ถ้ามีสิ่งที่ CEO ควรรู้ตอนนี้ (นัดใกล้ถึง งานสะดุด โน้ตที่ควรเห็น) ` +
     `ให้เขียนข้อความแจ้งสั้นๆ อ่านง่าย. ถ้าทุกอย่างเรียบร้อยและไม่มีอะไรต้องรบกวน ` +
     `ให้ตอบคำเดียวว่า OK`,
-    { noSub: true, logPrompt: "💓 รอบตรวจความเรียบร้อย",
+    { noSub: true, logPrompt: "💓 Health check",
       filterText: (t) => (/^\s*OK\.?\s*$/i.test(t) ? "" : t) });
 }
 
@@ -1343,7 +1360,7 @@ function resumePausedTick(now) {
     if (w.tries >= RESUME_MAX_TRIES) {
       pauseClear(w.key);
       broadcast({ type: "chat.message", agent: w.agent || "main",
-        text: "⏹ พยายามทำงานต่อหลายครั้งแล้วยังติดลิมิตอยู่ — ขอพักงานนี้ไว้ก่อนนะครับ (สั่งใหม่ได้ทุกเมื่อ)" });
+        text: "⏹ I tried resuming several times but the limit is still active. I paused this task for now; you can start it again anytime." });
       continue;
     }
     // Backoff: 5, 10, 20, 40 min between attempts (ts=0 on a restart ⇒ try right away).
@@ -1352,12 +1369,12 @@ function resumePausedTick(now) {
     if (agentRunning(w.agent)) continue;   // don't pile onto an agent already busy
     w.tries++; w.state = "active"; w.ts = now; savePaused();
     broadcast({ type: "chat.message", agent: w.agent,
-      text: "▶ โควต้าน่าจะคืนแล้ว — ขอทำงานที่ค้างไว้ต่อจากเดิมนะครับ" });
+      text: "▶ The quota appears to be back. Resuming the paused task from where it left off." });
     runClaude(w.agent,
       "ทำงานต่อจากที่ค้างไว้ก่อนหน้า (ก่อนหน้านี้สะดุดเพราะติดลิมิตชั่วคราว/โปรแกรมรีสตาร์ท). " +
       "ดูบริบทในเธรดนี้แล้วทำงานที่ยังไม่เสร็จให้จบ:\n\n" + String(w.prompt || ""),
       { session: w.key, project: w.project, resumable: true, _tries: w.tries,
-        resumePrompt: w.prompt, logPrompt: "▶ ทำงานต่อ (resume)" });
+        resumePrompt: w.prompt, logPrompt: "▶ Resume work" });
   }
 }
 
@@ -1379,7 +1396,7 @@ setInterval(() => {
         `แจ้งเตือนนัดหมายให้ CEO เดี๋ยวนี้: "${c.title}" เวลา ` +
         `${new Date(c.at).toLocaleString("th-TH")} (อีกประมาณ ${Math.max(1, Math.round((c.at - now) / 60000))} นาที). ` +
         `เขียนข้อความเตือนสั้นๆ เป็นกันเอง 1-2 ประโยค`,
-        { noSub: true, logPrompt: `🔔 เตือนนัด: ${c.title}` });
+        { noSub: true, logPrompt: `🔔 Reminder: ${c.title}` });
     }
   }
   const hb = Number(reg.heartbeatMin || 0);
@@ -1560,7 +1577,7 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
         pausePause(agent, opts.resumePrompt || prompt, projId, entry.key);
         broadcast({ type: "chat.message", agent, task, session: entry.key,
           runtime: "codex", model: "codex",
-          text: "⏸ ติดลิมิต (rate/usage) ชั่วคราว — พักงานไว้ก่อน เดี๋ยวจะทำต่อให้อัตโนมัติเมื่อโควต้าคืน" });
+          text: "⏸ Temporarily rate/usage limited. I paused this task and will resume automatically when quota returns." });
       } else pauseClear(entry.key);
     }
     if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
@@ -1997,7 +2014,7 @@ model "${mtag}". If the owner asks which AI/model/LLM you are, answer truthfully
       else if (isRateLimit(`${text || ""}\n${errText}\n${lastText}`)) {
         pausePause(agent, opts.resumePrompt || prompt, projId, entry.key);
         broadcast({ type: "chat.message", agent, task,
-          text: "⏸ ติดลิมิต (rate/usage) ชั่วคราว — พักงานไว้ก่อน เดี๋ยวจะทำต่อให้อัตโนมัติเมื่อโควต้าคืน" });
+          text: "⏸ Temporarily rate/usage limited. I paused this task and will resume automatically when quota returns." });
       } else pauseClear(entry.key);
     }
     if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
@@ -2337,11 +2354,11 @@ function makeDelegateFilter(depth, session, onHit) {
         try {
           const proj = reg.places[loc] ? createProject(nm, loc, "")
             : createProject(nm, "", loc);
-          keep.push(`📁 สร้างโปรเจค "${proj.name}" แล้ว → ${proj.dir}`);
+          keep.push(`📁 Created project "${proj.name}" → ${proj.dir}`);
         } catch (e) {
           // Already registered = fine (idempotent for routing); real errors show.
-          if (projectByName(nm)) keep.push(`📁 โปรเจค "${nm}" มีอยู่แล้ว — ใช้ตัวเดิม`);
-          else keep.push(`📁⚠️ สร้างโปรเจค "${nm}" ไม่สำเร็จ: ${e.message}`);
+          if (projectByName(nm)) keep.push(`📁 Project "${nm}" already exists — using the existing one`);
+          else keep.push(`📁⚠️ Could not create project "${nm}": ${e.message}`);
         }
         continue;
       }
@@ -2377,8 +2394,8 @@ function makeDelegateFilter(depth, session, onHit) {
           // agent must NOT enter it — report back so the Director re-plans
           // (and the two never collide inside one working tree).
           if (proj && projWin[proj]) {
-            reportToMain(t, `โปรเจค "${projName || proj}" เจ้าของกำลังเปิดทำงานอยู่ — ` +
-              `เข้าไปทำตอนนี้ไม่ได้ รอจนเจ้าของปิดหน้าต่างก่อน`, false, depth, session);
+            reportToMain(t, `Project "${projName || proj}" is currently open by the owner. ` +
+              `The agent cannot enter it now; wait until the owner closes the window.`, false, depth, session);
             return;
           }
           const tl = sess[t] || [];
@@ -2422,7 +2439,7 @@ function verifyThenReport(fromId, task, out, ok, depth, session, proj) {
     `Be skeptical but fair — only raise concrete problems, not style nitpicks.`;
   runClaude(fromId, reviewPrompt, {
     project: proj, session: "new", noSub: true,
-    logPrompt: `🔍 ตรวจงานของ ${a.name} ก่อนส่ง CEO`,
+    logPrompt: `🔍 Review ${a.name}'s work before reporting to CEO`,
     onDone: (verdict, vok) => {
       const txt = String(verdict || "");
       const flagged = vok && /(^|\n)\s*ISSUES\s*:/i.test(txt) && !/^\s*APPROVED\s*$/im.test(txt);
@@ -2434,9 +2451,9 @@ function verifyThenReport(fromId, task, out, ok, depth, session, proj) {
         `"""${txt.slice(0, 3000)}"""\n\nFix them now, then give your updated result.`;
       runClaude(fromId, fixPrompt, {
         project: proj, session: workSess, noSub: true,
-        logPrompt: `🛠 ${a.name} แก้งานตามรีวิว`,
+        logPrompt: `🛠 ${a.name} fixes review issues`,
         onDone: (out2, ok2) =>
-          reportToMain(fromId, `${out2}\n\n(ตรวจแล้ว + แก้ตามรีวิว)`, ok2, depth, session),
+          reportToMain(fromId, `${out2}\n\n(reviewed + fixed after review)`, ok2, depth, session),
       });
     },
   });
@@ -2461,7 +2478,7 @@ function reportToMain(fromId, text, ok, depth, session) {
     runClaude("main", wrapped, {
       session,
       noSub: true,
-      logPrompt: `📨 รายงานผลจาก ${a.name}`,
+      logPrompt: `📨 Report from ${a.name}`,
       filterText: depth < 2
         ? makeDelegateFilter(depth + 1, session, () => { delegatedMore = true; })
         : undefined,
@@ -2514,19 +2531,19 @@ function runSubAgents(parentId, parentEntry, tasks, onDone) {
     // Every ghost failed → nothing to synthesize. Don't burn a synthesis call;
     // hand the failure straight back so the Director can re-plan.
     if (!okResults.length) {
-      if (onDone) try { onDone("(ทุก sub-agent ทำงานไม่สำเร็จ)", false); } catch {}
+      if (onDone) try { onDone("(all sub-agents failed)", false); } catch {}
       return;
     }
     const failed = results.length - okResults.length;
     // Feed only the succeeded outputs (trims input, too).
     const report = okResults.map((r, i) => `--- SUB ${i + 1}: ${r.task}\n${r.text}`).join("\n\n") +
-      (failed ? `\n\n(${failed} sub-agent ไม่สำเร็จ — ข้ามไป)` : "");
+      (failed ? `\n\n(${failed} sub-agent failed — skipped)` : "");
     runClaude(parentId,
       `All your sub-agents have reported back:\n\n${report}\n\n` +
       `Now synthesize the FINAL answer to the user's original request (earlier ` +
       `in this conversation), in the user's language. Complete but concise.`,
       { session: parentEntry.key, noSub: true, onDone,
-        logPrompt: `👻 sub-agents ${tasks.length} ตัวรายงานผลครบแล้ว — สรุปผล` });
+        logPrompt: `👻 ${tasks.length} sub-agents reported back — synthesize` });
   }
 }
 
@@ -2737,7 +2754,7 @@ function voiceTranscribe(buf) {
     const tryGemini = (err) => {
       if (!gm) {
         return reject(err || new Error(
-          "ยังไม่มี API key สำหรับถอดเสียง — เพิ่ม OPENAI_API_KEY หรือ GEMINI_API_KEY ใน ⚙ CONNECT"));
+          "No transcription API key is set — add OPENAI_API_KEY or GEMINI_API_KEY in ⚙ CONNECT"));
       }
       const body = JSON.stringify({
         contents: [{ parts: [
@@ -2880,9 +2897,9 @@ function pcmToWav(pcm, rate) {
 function ttsSpeak(presetId, text, _try = 0) {
   return new Promise((resolve, reject) => {
     const gm = (reg.apiKeys || {}).GEMINI_API_KEY;
-    if (!gm) return reject(new Error("ต้องมี GEMINI_API_KEY (⚙ CONNECT) สำหรับเสียงพูด"));
+    if (!gm) return reject(new Error("GEMINI_API_KEY is required in ⚙ CONNECT for speech"));
     const p = VOICE_PRESETS[presetId];
-    if (!p) return reject(new Error("ไม่รู้จักเสียง: " + presetId));
+    if (!p) return reject(new Error("Unknown voice: " + presetId));
     // The preview TTS model 500s / overloads now and then — retry a transient hiccup
     // up to twice before giving up (most recover). Config errors above are NOT retried.
     const retryable = (m) => /internal|overload|unavailable|temporar|try again|timeout|\b50\d\b|\b429\b|ECONN|socket|network/i.test(String(m || ""));
@@ -3029,7 +3046,7 @@ function genImage(prompt) {
       resolve({ path: full, url: "/uploads/" + name });
     };
     const tryGemini = (err) => {
-      if (!k.GEMINI_API_KEY) return reject(err || new Error("ต้องมี OPENAI_API_KEY หรือ GEMINI_API_KEY (⚙ CONNECT)"));
+      if (!k.GEMINI_API_KEY) return reject(err || new Error("OPENAI_API_KEY or GEMINI_API_KEY is required in ⚙ CONNECT"));
       const body = JSON.stringify({
         contents: [{ parts: [{ text: "Generate an image: " + String(prompt).slice(0, 2000) }] }],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
@@ -3221,29 +3238,29 @@ function channelCommand(text) {
   const cmd = text.slice(1).split(/\s+/)[0].toLowerCase();
   if (cmd === "help" || cmd === "start")
     return [
-      "🧭 คำสั่งลัด:",
-      "/status — ภาพรวมออฟฟิศ",
-      "/agents — รายชื่อทีม",
-      "/projects — โปรเจค",
-      "/who — ใครกำลังทำงานอยู่",
+      "🧭 Shortcuts:",
+      "/status — office overview",
+      "/agents — team list",
+      "/projects — projects",
+      "/who — who is working",
       "",
-      "พิมพ์ข้อความปกติ = สั่งงาน Director ได้เลย 👑",
+      "Send a normal message to assign work to the Director 👑",
     ].join("\n");
   if (cmd === "agents" || cmd === "team") {
     const list = Object.keys(reg.agents)
       .filter((id) => id !== "ceo")
       .map((id) => `• ${reg.agents[id].name} — ${reg.agents[id].role}`);
-    return list.length ? "👥 ทีมงาน:\n" + list.join("\n") : "ยังไม่มีพนักงาน";
+    return list.length ? "👥 Team:\n" + list.join("\n") : "No staff yet";
   }
   if (cmd === "projects") {
     const ps = projectStatus();
     return ps.length
-      ? "📁 โปรเจค:\n" + ps.map((p) => `• ${p.name}${p.ai ? " 🟢" : ""}`).join("\n")
-      : "ยังไม่มีโปรเจค";
+      ? "📁 Projects:\n" + ps.map((p) => `• ${p.name}${p.ai ? " 🟢" : ""}`).join("\n")
+      : "No projects yet";
   }
   if (cmd === "who") {
     const busy = projectStatus().filter((p) => p.ai).map((p) => `• ${p.name}`);
-    return busy.length ? "🟢 กำลังทำงานอยู่:\n" + busy.join("\n") : "ตอนนี้ทีมว่างอยู่ 😌";
+    return busy.length ? "🟢 Working now:\n" + busy.join("\n") : "The team is idle right now 😌";
   }
   if (cmd === "status") {
     const on = Object.entries(channels.status())
@@ -3251,12 +3268,12 @@ function channelCommand(text) {
       .map(([k]) => k);
     return [
       "🏢 BagIdea Office",
-      `พนักงาน: ${staffCount()} คน`,
-      `โปรเจค: ${projectStatus().length} (กำลังทำงาน ${projectStatus().filter((p) => p.ai).length})`,
-      `ช่องทางที่ต่อ: ${on.length ? on.join(", ") : "—"}`,
+      `Staff: ${staffCount()}`,
+      `Projects: ${projectStatus().length} (working ${projectStatus().filter((p) => p.ai).length})`,
+      `Connected channels: ${on.length ? on.join(", ") : "—"}`,
     ].join("\n");
   }
-  return `ไม่รู้จักคำสั่ง /${cmd} — พิมพ์ /help ดูทั้งหมด`;
+  return `Unknown command /${cmd} — type /help to see all commands`;
 }
 
 const channels = require("./channels")({
@@ -3289,7 +3306,7 @@ const channels = require("./channels")({
           onDone: (out, ok) => {
             release();
             if (typer) clearInterval(typer);
-            try { reply(ok && out ? out : "ขออภัยครับ ระบบติดขัดชั่วคราว ลองใหม่อีกครั้งนะครับ"); }
+            try { reply(ok && out ? out : "Sorry, the system hit a temporary issue. Please try again."); }
             catch (e) { console.error("[chan reply]", e.message); }
           } });
     });
@@ -3318,12 +3335,12 @@ let proposals = loadJson(PROPOSALS, []);
 const saveProposals = () => fs.writeFileSync(PROPOSALS, JSON.stringify(proposals, null, 2));
 
 const BANTER = [
-  ["{a}: เห็นเจ้าเหมียวงีบบนโซฟาอีกแล้ว อิจฉาชีวิตมัน 🐱", "{b}: อย่าไปทักนะ เดี๋ยวตื่นมาเหยียบคีย์บอร์ดผม", "{a}: ครั้งก่อนมันพิมพ์ ggggggg ลงรายงานผมไป 555"],
-  ["{a}: เมื่อกี้เตะบอลข้ามตึกไปเลยนะ เห็นป่ะ ⚽", "{b}: เห็น… มันลอยผ่านหัว CEO ไปเฉียดมาก", "{a}: งั้นทำเงียบๆ ไว้นะ 🤫"],
-  ["{a}: กาแฟในแคนทีนหมดอีกแล้ว ☕", "{b}: ก็ {a} ชงทีเดียวครึ่งโถ!", "{a}: ข้อกล่าวหาที่ปฏิเสธไม่ได้ 😅"],
-  ["{a}: โต๊ะ Ghost Deck ข้างบนวิวดีมากนะ ลอยได้ด้วย", "{b}: ผมขึ้นไปทีไรเวียนหัวทุกที ร่างโปร่งแสงไม่ช่วยอะไรเลย", "{a}: มือใหม่ก็งี้แหละ 👻"],
-  ["{a}: คืนนี้ไฟสวนสวยเป็นพิเศษว่าไหม", "{b}: จริง เหมาะกับนั่งคิดงานเงียบๆ", "{a}: หรือนั่งไม่คิดอะไรเลยก็ดี 🌙"],
-  ["{a}: เห็นข่าว AI วันนี้ยัง ตลกมาก", "{b}: เราก็คือข่าว AI เดินได้นะรู้ตัวไหม", "{a}: …ลึกซึ้งจนขำไม่ออก 🤖"],
+  ["{a}: The cat is napping on the sofa again. I envy that life 🐱", "{b}: Don't wake it up, it will step on my keyboard again", "{a}: Last time it typed ggggggg into my report"],
+  ["{a}: Did you see that soccer kick clear the whole building? ⚽", "{b}: I saw it skim right over the CEO's head", "{a}: Then let's keep that quiet 🤫"],
+  ["{a}: The canteen is out of coffee again ☕", "{b}: Because {a} brews half the pot at once!", "{a}: A charge I cannot deny 😅"],
+  ["{a}: The Ghost Deck upstairs has a great view. It floats, too", "{b}: I get dizzy every time I go up there. Being translucent does not help", "{a}: Rookie ghost problem 👻"],
+  ["{a}: The garden lights look especially good tonight", "{b}: True. Perfect for quiet thinking", "{a}: Or for not thinking at all 🌙"],
+  ["{a}: Did you see today's AI news? Hilarious", "{b}: We are walking AI news, you know", "{a}: ...too deep to laugh at 🤖"],
 ];
 
 let lastSocial = Date.now();
@@ -3344,10 +3361,10 @@ function socialTick(now) {
     // Most group hangouts are idea sessions now — the team brainstorms things
     // worth pitching to the CEO (the owner asked for more proposals).
     const gtopics = [
-      "ระดมไอเดียกันว่าทีมเราน่าจะทำ plugin อะไรเสริมออฟฟิศให้เจ้าของใช้ดีขึ้น แล้วถ้าตกผลึกให้เสนอ CEO",
-      "คุยกันว่าเจ้าของน่าจะชอบอะไร แล้วลองคิดโปรเจค/plugin สนุกๆ ที่ช่วยเขาได้ — อันไหนเข้าท่าก็ยื่นข้อเสนอ",
-      "ช่วยกันคิดว่ามีงานสร้างสรรค์อะไรที่ทีมอยากทำเป็นโปรเจค แล้วเสนอ CEO ดู",
-      "มารวมตัวคุยเล่นกันแบบสบายๆ เล่าเรื่องสนุกๆ ที่เจอระหว่างทำงาน หยอกล้อกันได้"];
+      "Brainstorm an office plugin that would help the owner. If the idea solidifies, propose it to the CEO",
+      "Discuss what the owner might like, then think of a useful project/plugin. Propose the strongest idea",
+      "Think together about a creative project the team wants to build, then propose it to the CEO",
+      "Hang out casually, share funny work moments, and tease each other lightly"];
     runDiscussion(group, gtopics[Math.floor(Math.random() * gtopics.length)],
       1, true);   // 1 round (was 2) — ~3 runs instead of up to 8, hangout still happens
     return;
@@ -3359,7 +3376,7 @@ function socialTick(now) {
     const lines = BANTER[Math.floor(Math.random() * BANTER.length)];
     const nameOf = (id) => (reg.agents[id] || { name: id }).name;
     const task = "soc" + (now % 100000);
-    broadcast({ type: "collab.started", agents: pick, task, text: "พักเบรก ☕" });
+    broadcast({ type: "collab.started", agents: pick, task, text: "Coffee break ☕" });
     lines.forEach((tpl, i) => {
       const who = tpl.startsWith("{a}") ? pick[0] : pick[1];
       const text = tpl.replace(/\{a\}:\s*/, "").replace(/\{b\}:\s*/, "")
@@ -3370,10 +3387,10 @@ function socialTick(now) {
       2500 + lines.length * 3600 + 2500);
   } else {
     // a REAL conversation between AIs — they often pitch a project to the CEO.
-    const topics = ["ระดมไอเดียสนุกๆ ว่าอยากสร้างอะไรเป็นโปรเจค/plugin ของทีม แล้วเสนอ CEO ถ้าเข้าท่า",
-      "คุยกันว่าออฟฟิศน่าจะมี plugin อะไรเพิ่ม แล้วลองยื่นข้อเสนอให้เจ้าของ",
-      "คุยเล่นเรื่องงานช่วงนี้ แลกเปลี่ยนว่าใครทำอะไรอยู่ หยอกล้อกันได้",
-      "แชร์เทคนิคการทำงานที่เพิ่งค้นพบ"];
+    const topics = ["Brainstorm a fun team project/plugin and propose it to the CEO if it seems useful",
+      "Discuss what plugin the office should have next, then propose it to the owner",
+      "Chat about recent work, share what everyone is doing, and joke around lightly",
+      "Share a work technique you recently discovered"];
     runDiscussion(pick, topics[Math.floor(Math.random() * topics.length)], 1, true);
   }
 }
@@ -3691,7 +3708,7 @@ const server = http.createServer((req, res) => {
           const safety = setTimeout(() => {
             if (waited) { waited = null;
               res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-              res.end(JSON.stringify({ ok: false, text: "(timeout 10 นาที — งานยังทำต่อเบื้องหลัง)" })); }
+              res.end(JSON.stringify({ ok: false, text: "(timeout after 10 minutes — the task is still running in the background)" })); }
           }, 10 * 60000);
           waited = (text, ok) => {
             clearTimeout(safety);
@@ -3706,7 +3723,7 @@ const server = http.createServer((req, res) => {
         // requested project workspace.
         const task = agent === "ceo"
           ? ceoFlow(prompt, session, project,
-              { logPrompt: voice ? "🎤👑 (สั่งด้วยเสียง) " + origPrompt : origPrompt,
+              { logPrompt: voice ? "🎤👑 (voice order) " + origPrompt : origPrompt,
                 relay: true,  // mirror the CEO conversation to connected channels
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
           : agent === "main"
@@ -3863,8 +3880,8 @@ const server = http.createServer((req, res) => {
         if (!reg.agents[id]) {
           if (staffCount() >= MAX_STAFF) {
             res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-            return res.end(`ออฟฟิศเต็มแล้ว — รับพนักงานได้สูงสุด ${MAX_STAFF} คน (ไม่นับ CEO). ` +
-              `งานขนานให้ใช้การแตกร่างผี (sub-agents) แทน`);
+            return res.end(`The office is full — you can hire up to ${MAX_STAFF} staff members (CEO not counted). ` +
+              `Use ghost split sub-agents for parallel work instead.`);
           }
         }
         const cur = reg.agents[id] || { skills: [], tools: [] };
@@ -4068,8 +4085,8 @@ const server = http.createServer((req, res) => {
                   maxRetries: 6, retryDelay: 350 });
               } catch (e) {
                 res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-                return res.end(`ลบไม่สำเร็จ — มีไฟล์ในโฟลเดอร์ถูกใช้งานอยู่ (${e.code || e.message}). ` +
-                  `ปิดโปรแกรม/เทอร์มินัลที่ค้างอยู่ในโฟลเดอร์นี้แล้วกด 🗑 อีกครั้ง`);
+                return res.end(`Delete failed — files in this folder are still in use (${e.code || e.message}). ` +
+                  `Close any program or terminal using this folder, then press 🗑 again.`);
               }
               projects = projects.filter((x) => x.id !== pid);
               saveProjects();
@@ -4153,7 +4170,7 @@ const server = http.createServer((req, res) => {
           // also holds: an agent won't be dispatched into a project you have open.
           if ((projRuns[id] || 0) > 0) {
             res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-            return res.end("agent กำลังทำงานในโปรเจคนี้อยู่ — กด ⏹ หยุดก่อนเพื่อเข้าไปดู/ทำเอง หรือรอจนงานเสร็จ");
+            return res.end("An agent is working in this project. Press ⏹ Stop before opening/taking over, or wait until the task finishes.");
           }
           ensureTrusted(dir);  // no trust dialog ambush in the new window
           // Smart entry: resume the NEWEST session explicitly — straight into
@@ -4495,7 +4512,7 @@ const server = http.createServer((req, res) => {
         const pc = reg.providerConfig[provider] || {};
         const spec = providers.PROVIDERS[provider];
         const kind = spec ? spec.format : pc.kind;   // "anthropic" | "openai"
-        if (!kind) return done(false, "ไม่รู้จัก provider นี้");
+        if (!kind) return done(false, "Unknown provider");
         const setConn = (ok, models) => {
           reg.providerConfig[provider] = reg.providerConfig[provider] || {};
           reg.providerConfig[provider].connected = ok;
@@ -4506,22 +4523,22 @@ const server = http.createServer((req, res) => {
         if (kind === "openai") {
           // OpenAI-compatible: GET /models validates the key + lists usable models.
           const { models: modelsUrl, key } = proxy.upstreamFor(provider, reg);
-          if (!modelsUrl) return done(false, "ไม่พบ endpoint");
-          if (!key) return done(false, "ยังไม่ได้วาง key");
+          if (!modelsUrl) return done(false, "Missing endpoint");
+          if (!key) return done(false, "Missing key");
           const r = await fetch(modelsUrl, { headers: { authorization: "Bearer " + key }, signal });
           if (r.ok) {
             let models = [];
             try { const j = await r.json(); captureModelCtx(provider, j.data); models = proxy.cleanModels((j.data || []).map((m) => m.id)).sort().slice(0, 120); } catch {}
             setConn(true, models);
-            return done(true, "เชื่อมต่อแล้ว ✓", models);
+            return done(true, "Connected ✓", models);
           }
           setConn(false);
-          return done(false, "key ไม่ผ่าน (HTTP " + r.status + ")");
+          return done(false, "Key rejected (HTTP " + r.status + ")");
         }
         // anthropic-compatible: a 1-token /v1/messages probe (401/403 = bad key).
         const base = pc.baseUrl || (spec && spec.baseUrl);
-        if (!base) return done(false, "ไม่พบ endpoint");
-        if (!pc.token) return done(false, "ยังไม่ได้วาง key");
+        if (!base) return done(false, "Missing endpoint");
+        if (!pc.token) return done(false, "Missing key");
         const model = pc.model || (spec && spec.models && spec.models.find(Boolean)) || "";
         const r = await fetch(base.replace(/\/+$/, "") + "/v1/messages", {
           method: "POST", signal,
@@ -4545,8 +4562,8 @@ const server = http.createServer((req, res) => {
           } catch {}
         }
         setConn(!authBad && !pathBad, models && models.length ? models : null);
-        if (pathBad) return done(false, "endpoint ไม่ถูก (HTTP " + r.status + ") — ถ้า baseUrl ลงท้ายด้วย /v1 ให้ตัดออก");
-        return done(!authBad, authBad ? "key ไม่ผ่าน (HTTP " + r.status + ")" : "เชื่อมต่อแล้ว ✓", models);
+        if (pathBad) return done(false, "Invalid endpoint (HTTP " + r.status + ") — if baseUrl ends with /v1, remove it");
+        return done(!authBad, authBad ? "Key rejected (HTTP " + r.status + ")" : "Connected ✓", models);
       } catch (e) { return done(false, String((e && e.message) || e)); }
     });
 
@@ -4637,7 +4654,7 @@ const server = http.createServer((req, res) => {
     readBodyRaw(req, (buf) => {
       try {
         if (!buf.length) throw new Error("empty file");
-        if (buf.length > 80 * 1024 * 1024) throw new Error("ไฟล์ใหญ่เกิน 80MB");
+        if (buf.length > 80 * 1024 * 1024) throw new Error("File is larger than 80MB");
         const raw = decodeURIComponent(String(req.headers["x-file-name"] || "file.bin"));
         const safe = raw.replace(/[^\w.ก-๙ -]/g, "_").slice(-80);
         const dir = path.join(WORKSPACE, "uploads");
@@ -4843,7 +4860,7 @@ const server = http.createServer((req, res) => {
         let url = String(reqBody.url || "").trim();
         const mode = String(reqBody.mode || "");   // "" → ask on conflict · "overwrite" · "new"
         if (!/^https:\/\/(github\.com|gitlab\.com|[\w.-]+)\/[\w.\-/]+$/.test(url))
-          throw new Error("ใส่ลิงก์ git repo ที่ขึ้นต้น https:// ของ plugin");
+          throw new Error("Enter a plugin git repo link that starts with https://");
         if (!url.endsWith(".git")) url += ".git";
         // Clone into a temp folder first, then move it to plugins/<id> using
         // the id from its OWN manifest — so the install folder always matches
@@ -4855,17 +4872,17 @@ const server = http.createServer((req, res) => {
           const fail = (msg) => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
             res.writeHead(400, { "content-type": "text/plain; charset=utf-8" }); res.end(msg); };
           if (e || !fs.existsSync(path.join(tmp, "plugin.json")))
-            return fail(e ? "clone ไม่สำเร็จ: " + e.message : "repo นี้ไม่มี plugin.json — ไม่ใช่ plugin ที่ถูกต้อง");
+            return fail(e ? "Clone failed: " + e.message : "This repo has no plugin.json — it is not a valid plugin");
           let man = {}; try { man = JSON.parse(fs.readFileSync(path.join(tmp, "plugin.json"), "utf8")); } catch {}
           const repoName = url.split("/").pop().replace(/\.git$/, "");
           const id = String(man.id || repoName).replace(/[^\w-]/g, "");
-          if (!id) return fail("plugin.json ไม่มี id ที่ถูกต้อง");
+          if (!id) return fail("plugin.json has no valid id");
           let finalId = id;
           let dest = path.join(pluginsRoot, id);
           if (fs.existsSync(dest)) {
             if (mode === "overwrite") {
               try { fs.rmSync(dest, { recursive: true, force: true }); }
-              catch (err) { return fail("ลบตัวเดิมไม่สำเร็จ: " + err.message); }
+              catch (err) { return fail("Could not remove the existing plugin: " + err.message); }
             } else if (mode === "new") {
               // Install a SECOND copy under a free id (foo-2, foo-3…) and rewrite the
               // manifest id/name to match, so it's a genuinely distinct plugin.
@@ -4877,7 +4894,7 @@ const server = http.createServer((req, res) => {
                 man.id = finalId;
                 if (man.name) man.name = man.name + " (" + n + ")";
                 fs.writeFileSync(path.join(tmp, "plugin.json"), JSON.stringify(man, null, 2));
-              } catch (err) { return fail("ตั้งชื่อตัวใหม่ไม่สำเร็จ: " + err.message); }
+              } catch (err) { return fail("Could not name the new plugin copy: " + err.message); }
             } else {
               // No decision yet → let the UI ask the owner (overwrite vs new copy).
               try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
@@ -4885,7 +4902,7 @@ const server = http.createServer((req, res) => {
               return res.end(JSON.stringify({ exists: true, id }));
             }
           }
-          try { fs.renameSync(tmp, dest); } catch (err) { return fail("ติดตั้งไม่สำเร็จ: " + err.message); }
+          try { fs.renameSync(tmp, dest); } catch (err) { return fail("Install failed: " + err.message); }
           plugins.load();
           broadcast({ type: "plugins.changed" }, false);
           res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -4917,11 +4934,11 @@ const server = http.createServer((req, res) => {
         const id = String(JSON.parse(body).id || "").replace(/[^\w-]/g, "");
         const dir = path.join(__dirname, "..", "plugins", id);
         const manFile = path.join(dir, "plugin.json");
-        if (!fs.existsSync(manFile)) throw new Error("ไม่พบ plugin");
+        if (!fs.existsSync(manFile)) throw new Error("Plugin not found");
         // Core plugins ship with the office and can't be uninstalled; only
         // plugins the user added (e.g. via GitHub) are removable.
         let man = {}; try { man = JSON.parse(fs.readFileSync(manFile, "utf8")); } catch {}
-        if (man.core) throw new Error("plugin หลักลบไม่ได้");
+        if (man.core) throw new Error("Core plugins cannot be removed");
         fs.rmSync(dir, { recursive: true, force: true });
         plugins.load();
         broadcast({ type: "plugins.changed" }, false);
@@ -4940,7 +4957,7 @@ const server = http.createServer((req, res) => {
         const { name } = JSON.parse(body);
         const val = (reg.apiKeys || {})[name];
         if (!val) { res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ ok: false, msg: "ยังไม่ได้ตั้ง key" })); }
+          return res.end(JSON.stringify({ ok: false, msg: "Key is not set" })); }
         const done = (ok, msg) => { res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
           res.end(JSON.stringify({ ok, msg })); };
         const https = require("https");
@@ -4948,7 +4965,7 @@ const server = http.createServer((req, res) => {
           const rq = https.request({ method: "GET", host: "api.openai.com", path: "/v1/models",
             headers: { authorization: "Bearer " + val } }, (rs) => {
             rs.resume();
-            done(rs.statusCode === 200, rs.statusCode === 200 ? "ใช้งานได้ ✓" : "key ไม่ผ่าน (HTTP " + rs.statusCode + ")");
+            done(rs.statusCode === 200, rs.statusCode === 200 ? "Works ✓" : "Key rejected (HTTP " + rs.statusCode + ")");
           });
           rq.setTimeout(12000, () => rq.destroy(new Error("timeout")));
           rq.on("error", (e) => done(false, e.message));
@@ -4957,12 +4974,12 @@ const server = http.createServer((req, res) => {
           const rq = https.request({ method: "GET", host: "generativelanguage.googleapis.com",
             path: "/v1beta/models?key=" + val }, (rs) => {
             rs.resume();
-            done(rs.statusCode === 200, rs.statusCode === 200 ? "ใช้งานได้ ✓" : "key ไม่ผ่าน (HTTP " + rs.statusCode + ")");
+            done(rs.statusCode === 200, rs.statusCode === 200 ? "Works ✓" : "Key rejected (HTTP " + rs.statusCode + ")");
           });
           rq.setTimeout(12000, () => rq.destroy(new Error("timeout")));
           rq.on("error", (e) => done(false, e.message));
           rq.end();
-        } else done(true, "ตั้งค่าแล้ว");
+        } else done(true, "Configured");
       } catch (e) { res.writeHead(400); res.end(String(e.message)); }
     });
 
@@ -5231,6 +5248,62 @@ const server = http.createServer((req, res) => {
       }
     });
 
+  } else if (req.method === "POST" && req.url === "/ui/season") {
+    // Lightweight season phase: actual season = (two-hour slot + offset) % 4.
+    // This keeps the "auto changes every two hours" behavior while letting the map
+    // button nudge the current visual season immediately.
+    readBody(req, (body) => {
+      try {
+        const a = JSON.parse(body || "{}");
+        const seasons = ["spring", "summer", "autumn", "winter"];
+        let offset = Number(reg.seasonOffset || 0);
+        if (Number.isFinite(Number(a.offset))) offset = Number(a.offset);
+        else offset += Number(a.step || 1);
+        offset = ((Math.trunc(offset) % seasons.length) + seasons.length) % seasons.length;
+        reg.seasonOffset = offset;
+        saveReg();
+        const season = seasons[(Math.floor(new Date().getHours() / 2) + offset) % seasons.length];
+        broadcast({ type: "ui.season", offset, season }, false);
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, offset, season }));
+      } catch {
+        res.writeHead(400);
+        res.end("bad json");
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/ui/weather") {
+    readBody(req, (body) => {
+      try {
+        const a = JSON.parse(body || "{}");
+        const seasons = ["spring", "summer", "autumn", "winter"];
+        const weatherBySeason = {
+          spring: ["sunny", "light_rain"],
+          summer: ["sunny", "light_rain", "storm"],
+          autumn: ["sunny", "light_rain"],
+          winter: ["sunny", "snow"],
+        };
+        const now = new Date();
+        const season = seasons[(Math.floor(now.getHours() / 2) + Number(reg.seasonOffset || 0)) % seasons.length];
+        const opts = weatherBySeason[season] || weatherBySeason.spring;
+        const slot = Math.floor(now.getTime() / 3600000);
+        let offset = Number(reg.weatherOffset || 0);
+        if (Number.isFinite(Number(a.offset))) offset = Number(a.offset);
+        else offset += Number(a.step || 1);
+        offset = ((Math.trunc(offset) % opts.length) + opts.length) % opts.length;
+        reg.weatherOffset = offset;
+        saveReg();
+        const base = Math.abs(Math.imul(slot ^ (season.length * 131), 1103515245) + 12345);
+        const weather = opts[(base + offset) % opts.length];
+        broadcast({ type: "ui.weather", offset, season, weather }, false);
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, offset, season, weather }));
+      } catch {
+        res.writeHead(400);
+        res.end("bad json");
+      }
+    });
+
   } else if (req.method === "POST" && req.url === "/ui/monitor") {
     // Which monitor the wallpaper runs on (multi-monitor). The shell reads
     // daemon/monitor.txt at attach time (0 = primary). Changing it auto-restarts
@@ -5328,11 +5401,11 @@ const server = http.createServer((req, res) => {
       const w = JSON.parse(body || "{}");
       queueDirectorTurn((release) => {
         runClaude("main", WORKFLOW_ANALYZE_PROMPT + "\n\n" + workflowToText(w), {
-          logPrompt: "🔀 วิเคราะห์ workflow: " + (w.name || ""),
+          logPrompt: "🔀 Analyze workflow: " + (w.name || ""),
           onDone: (out, ok) => {
             release();
             res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify({ ok: !!ok, analysis: ok && out ? out : "วิเคราะห์ไม่สำเร็จ ลองใหม่อีกครั้ง" }));
+            res.end(JSON.stringify({ ok: !!ok, analysis: ok && out ? out : "Analysis failed. Please try again." }));
           },
         });
       });
@@ -5350,7 +5423,7 @@ const server = http.createServer((req, res) => {
           `Reply with ONLY a JSON object, no prose: ` +
           `{"name":"<short title>","steps":["<step 1>","<step 2>", ...]}. ` +
           `3–8 short imperative steps in order, in the language of the goal.`,
-          { noSub: true, logPrompt: "🪄 ร่าง workflow: " + goal.slice(0, 40),
+          { noSub: true, logPrompt: "🪄 Draft workflow: " + goal.slice(0, 40),
             onDone: (out, ok) => {
               release();
               let wf = null;
@@ -5387,11 +5460,11 @@ const server = http.createServer((req, res) => {
           "waits for all branches, then continues from their merged results. Report the " +
           "final result.\n\n" + workflowToText(w),
           undefined, undefined,
-          { logPrompt: "🔀▶ รัน workflow: " + (w.name || ""),
+          { logPrompt: "🔀▶ Run workflow: " + (w.name || ""),
             onDone: (out, ok) => {
               release();
               res.writeHead(200, { "content-type": "application/json" });
-              res.end(JSON.stringify({ ok: !!ok, result: ok && out ? out : "รันไม่สำเร็จ ลองใหม่อีกครั้ง" }));
+              res.end(JSON.stringify({ ok: !!ok, result: ok && out ? out : "Run failed. Please try again." }));
             } });
       });
     } catch (e) { res.writeHead(400); res.end(String(e.message)); } });
@@ -5576,14 +5649,14 @@ const server = http.createServer((req, res) => {
               `จัดทีมเลย: DELEGATE: <agent> @ ${p.name} :: <งานชิ้นแรกที่ชัดเจน> ` +
               `ให้คนที่เสนอไอเดียได้ทำเป็นหลัก แล้วสรุปแผนสั้นๆ` +
               (note ? ` และนำข้อความของเจ้าของไปปรับทิศทางงานด้วย` : ""),
-              { logPrompt: `✅ อนุมัติข้อเสนอ: ${p.name}`,
+              { logPrompt: `✅ Approved proposal: ${p.name}`,
                 filterText: makeDelegateFilter(0, undefined),
                 onDone: () => release() });
           });
         } else if (decision === "reject" && note) {
           // The team hears WHY — the owner's note lands in the office feed.
           broadcast({ type: "chat.message", agent: "main",
-            text: `CEO ยังไม่อนุมัติ "${p.name}" — ${note}` });
+            text: `CEO has not approved "${p.name}" yet — ${note}` });
         }
         broadcast({ type: "proposal." + p.status, agent: p.by, name: p.name, proposal: p.id });
         res.writeHead(200); res.end("ok");
@@ -5727,7 +5800,7 @@ const server = http.createServer((req, res) => {
       try {
         const { text, preset, agent, intro } = JSON.parse(body);
         const pid = preset || (reg.agents[agent] && reg.agents[agent].voice);
-        if (!pid) throw new Error("agent นี้ยังไม่ได้ตั้งเสียง");
+        if (!pid) throw new Error("This agent has no voice set");
         const say = intro ? voiceIntro(pid, reg.lang || "en") : text;
         if (!say) throw new Error("no text");
         ttsSpeak(pid, say).then((wav) => {
@@ -5755,11 +5828,11 @@ const server = http.createServer((req, res) => {
     readBodyRaw(req, (buf) => {
       if (!buf || buf.length < 4000) {
         res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-        return res.end("เสียงสั้นเกินไป — กดค้างแล้วพูดให้จบก่อนปล่อย");
+        return res.end("Audio is too short — hold the button, finish speaking, then release.");
       }
       if (buf.length > 24 * 1024 * 1024) {
         res.writeHead(413, { "content-type": "text/plain; charset=utf-8" });
-        return res.end("คลิปยาวเกินไป (จำกัด ~60 วินาที)");
+        return res.end("Audio clip is too long (limit ~60 seconds).");
       }
       voiceTranscribe(buf).then((text) => {
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -5873,7 +5946,7 @@ function handleLive(req, sock) {
     "Connection: Upgrade\r\nSec-WebSocket-Accept: " + wsAccept(key) + "\r\n\r\n");
   const toClient = (obj) => { try { sock.write(wsFrame(JSON.stringify(obj))); } catch {} };
   const gm = (reg.apiKeys || {}).GEMINI_API_KEY;
-  if (!gm) { toClient({ type: "error", text: "ต้องมี GEMINI_API_KEY (⚙ CONNECT) สำหรับ realtime" }); return; }
+  if (!gm) { toClient({ type: "error", text: "GEMINI_API_KEY is required in ⚙ CONNECT for realtime." }); return; }
 
   // Calling is for the MAIN agent only — it speaks for the whole office. Use the
   // voice the owner assigned to main; if none, fall back to a default preset.
@@ -5897,8 +5970,8 @@ function handleLive(req, sock) {
     if (callEnded || !callStart) return;
     callEnded = true;
     const s = Math.round((Date.now() - callStart) / 1000);
-    const dur = s >= 60 ? `${Math.floor(s / 60)} นาที ${s % 60} วิ` : `${s} วิ`;
-    logCall(`📞 คุยสายเสียงกับ ${a.name || "ผู้ช่วย"} · ${callStartStr} · นาน ${dur}`);
+    const dur = s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} sec` : `${s} sec`;
+    logCall(`📞 Voice call with ${a.name || "assistant"} · ${callStartStr} · duration ${dur}`);
   };
 
   const gemini = require("./channels").wsConnect(
@@ -6027,6 +6100,9 @@ try { wireWorkspaceSettings(WORKSPACE, __dirname); }
 catch (e) { console.error("[startup] wireWorkspaceSettings failed:", e && e.message); }
 server.listen(OEP_PORT, "127.0.0.1", () => {
   console.log(`[oep] http+ws listening :${OEP_PORT}`);
+  // Windows wallpaper ownership lives in the shell. The PowerShell repin
+  // watcher was a fallback, but on some Explorer layouts it becomes a full
+  // desktop overlay and visually covers icons/windows.
   // Fresh boot ⇒ nothing is running (runChildren starts empty). A task.started left
   // dangling in the journal by the previous (killed) run would otherwise REPLAY on the
   // next client connect and pin agents as "working" forever. Journal a reset so it

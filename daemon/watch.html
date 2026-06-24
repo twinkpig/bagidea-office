@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,7 +29,7 @@
 <header>
   <span class="dot" id="dot"></span>
   <b>👁 <span id="who">office</span></b>
-  <span class="live">live · read-only (ไม่รบกวนการทำงาน)</span>
+  <span class="live">live · read-only (does not interrupt work)</span>
 </header>
 <div id="log"></div>
 <script>
@@ -60,12 +60,12 @@
       let ev; try { ev = JSON.parse(e.data); } catch { return; }
       if (ev.replay || !relevant(ev)) return;
       const who = ev.sub || ev.agent || "";
-      if (ev.type === "task.started") add("start", "▶ <b>" + esc(who) + "</b> " + esc((ev.title || "เริ่มงาน").slice(0, 160)));
+      if (ev.type === "task.started") add("start", "▶ <b>" + esc(who) + "</b> " + esc((ev.title || "started work").slice(0, 160)));
       else if (ev.type === "task.progress") add("tool", "  ⚙ " + esc(ev.tool || "…"));
       else if (ev.type === "chat.message") add("out", esc((ev.text || "").slice(0, 4000)));
-      else if (ev.type === "task.completed") add("done", "✓ เสร็จ");
-      else if (ev.type === "task.failed") add("fail", "✗ ล้มเหลว");
-      else if (ev.type === "perm.requested") add("perm", "🔒 ขออนุญาตใช้ " + esc(ev.tool || ""));
+      else if (ev.type === "task.completed") add("done", "✓ done");
+      else if (ev.type === "task.failed") add("fail", "✗ failed");
+      else if (ev.type === "perm.requested") add("perm", "🔒 permission requested for " + esc(ev.tool || ""));
     };
   }
   connect();
