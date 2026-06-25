@@ -2121,6 +2121,12 @@ fn load_orb_position() -> Option<(f64, f64)> {
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
+fn clamp_orb_position(x: f64, y: f64, logical_w: f64, logical_h: f64) -> (f64, f64) {
+    let max_x = (logical_w - ORB_SIZE).max(20.0);
+    let max_y = (logical_h - ORB_SIZE).max(20.0);
+    (x.clamp(20.0, max_x), y.clamp(20.0, max_y))
+}
+
 fn save_orb_position(x: f64, y: f64) {
     let path = orb_state_path();
     if let Some(parent) = path.parent() {
@@ -2263,7 +2269,9 @@ fn main() {
     let logical_h = screen_h / sf;
     let default_orb_x = (logical_w - ORB_SIZE - ORB_RIGHT_MARGIN).max(20.0);
     let default_orb_y = ORB_SIZE;
-    let (orb_x, orb_y) = load_orb_position().unwrap_or((default_orb_x, default_orb_y));
+    let (orb_x, orb_y) = load_orb_position()
+        .map(|(x, y)| clamp_orb_position(x, y, logical_w, logical_h))
+        .unwrap_or((default_orb_x, default_orb_y));
     let overlay_x = (logical_w - FULL.0 - ORB_SIZE * 2.2).max(20.0);
     let overlay_y = 90.0;
     let feed_h = (logical_h * 0.5).clamp(320.0, 560.0);
@@ -2377,6 +2385,7 @@ fn main() {
     // (2 fps). Driven by the manual "Hide office" tray item AND auto-occlusion.
     let mut vis_on = true;
     let mut last_watch = std::time::Instant::now();
+    let mut orb_drag_until = None::<std::time::Instant>;
     event_loop.run(move |event, target, control_flow| {
         // A slow poll tick keeps the tray channels live without pinning a core.
         *control_flow = ControlFlow::WaitUntil(
@@ -2539,8 +2548,16 @@ fn main() {
                 ..
             } => {
                 if window_id == orb_id {
-                    if let Ok(pos) = orb.outer_position() {
-                        save_orb_position(pos.x, pos.y);
+                    if orb_drag_until
+                        .map(|until| std::time::Instant::now() <= until)
+                        .unwrap_or(false)
+                    {
+                        if let Ok(pos) = orb.outer_position() {
+                            let x = pos.x as f64 / sf;
+                            let y = pos.y as f64 / sf;
+                            let (x, y) = clamp_orb_position(x, y, logical_w, logical_h);
+                            save_orb_position(x, y);
+                        }
                     }
                 }
             }
@@ -2667,6 +2684,8 @@ fn main() {
                     raise_orb(&orb);
                 }
                 UserEvent::DragOrb => {
+                    orb_drag_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                     let _ = orb.drag_window();
                 }
                 UserEvent::DragOverlay => {
@@ -2801,9 +2820,6 @@ fn main() {
         }
 
         if shutdown {
-            if let Ok(pos) = orb.outer_position() {
-                save_orb_position(pos.x, pos.y);
-            }
             // Tell the watchdog to stand down BEFORE we kill the daemon, or it
             // would dutifully resurrect the very process we're shutting down.
             SHUTTING_DOWN.store(true, Ordering::Relaxed);
