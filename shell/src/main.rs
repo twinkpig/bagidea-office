@@ -38,6 +38,7 @@ const MINI: (f64, f64) = (390.0, 430.0);
 const FEED_W: f64 = 330.0;
 const PARK: (f64, f64) = (-9000.0, 100.0);
 const SPLASH_SIZE: f64 = 210.0;
+const ORB_RIGHT_MARGIN: f64 = 96.0;
 
 #[derive(Debug)]
 enum UserEvent {
@@ -2213,7 +2214,7 @@ fn main() {
         .unwrap_or((1920.0, 1080.0, 1.0));
     let logical_w = screen_w / sf;
     let logical_h = screen_h / sf;
-    let orb_x = logical_w - ORB_SIZE * 2.0;
+    let orb_x = (logical_w - ORB_SIZE - ORB_RIGHT_MARGIN).max(20.0);
     let orb_y = ORB_SIZE;
     let overlay_x = (logical_w - FULL.0 - ORB_SIZE * 2.2).max(20.0);
     let overlay_y = 90.0;
