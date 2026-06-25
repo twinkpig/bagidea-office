@@ -2082,6 +2082,53 @@ fn json_quote(s: &str) -> String {
     o
 }
 
+fn orb_state_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata)
+                .join("BagIdeaOffice")
+                .join("orb-position.txt");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("BagIdeaOffice")
+                .join("orb-position.txt");
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg)
+            .join("BagIdeaOffice")
+            .join("orb-position.txt");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join("BagIdeaOffice")
+            .join("orb-position.txt");
+    }
+    std::env::temp_dir().join("bagidea_orb_position.txt")
+}
+
+fn load_orb_position() -> Option<(f64, f64)> {
+    let raw = std::fs::read_to_string(orb_state_path()).ok()?;
+    let (x, y) = raw.trim().split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+fn save_orb_position(x: f64, y: f64) {
+    let path = orb_state_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, format!("{x:.1},{y:.1}"));
+}
+
 fn main() {
     // bagidea:// deep link (the website's "Open in office" Install button)?
     // Hand it to the running office — which asks the user to confirm before
@@ -2214,8 +2261,9 @@ fn main() {
         .unwrap_or((1920.0, 1080.0, 1.0));
     let logical_w = screen_w / sf;
     let logical_h = screen_h / sf;
-    let orb_x = (logical_w - ORB_SIZE - ORB_RIGHT_MARGIN).max(20.0);
-    let orb_y = ORB_SIZE;
+    let default_orb_x = (logical_w - ORB_SIZE - ORB_RIGHT_MARGIN).max(20.0);
+    let default_orb_y = ORB_SIZE;
+    let (orb_x, orb_y) = load_orb_position().unwrap_or((default_orb_x, default_orb_y));
     let overlay_x = (logical_w - FULL.0 - ORB_SIZE * 2.2).max(20.0);
     let overlay_y = 90.0;
     let feed_h = (logical_h * 0.5).clamp(320.0, 560.0);
@@ -2487,6 +2535,17 @@ fn main() {
             }
             Event::WindowEvent {
                 window_id,
+                event: WindowEvent::Moved(_),
+                ..
+            } => {
+                if window_id == orb_id {
+                    if let Ok(pos) = orb.outer_position() {
+                        save_orb_position(pos.x, pos.y);
+                    }
+                }
+            }
+            Event::WindowEvent {
+                window_id,
                 event: WindowEvent::Resized(_),
                 ..
             } => {
@@ -2742,6 +2801,9 @@ fn main() {
         }
 
         if shutdown {
+            if let Ok(pos) = orb.outer_position() {
+                save_orb_position(pos.x, pos.y);
+            }
             // Tell the watchdog to stand down BEFORE we kill the daemon, or it
             // would dutifully resurrect the very process we're shutting down.
             SHUTTING_DOWN.store(true, Ordering::Relaxed);
