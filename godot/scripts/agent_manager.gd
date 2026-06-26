@@ -45,10 +45,18 @@ var _chat_req: HTTPRequest
 var _chat_layer: CanvasLayer
 var _chat_panel: PanelContainer
 var _chat_title: Label
+var _chat_meta: Label
+var _chat_tasks: Label
+var _chat_recent: Label
 var _chat_input: LineEdit
 var _selected_chat_agent := ""
 var _last_chat_agent := ""
 var _click_down_pos := Vector2.INF
+var _agent_recent := {}
+var _agent_task_titles := {}
+var _agent_sessions := {}
+var _agent_runtime := {}
+var _agent_last_status := {}
 
 func _ready() -> void:
 	# Hold off ambient cinematic close-ups so the OPENING shot is the CEO intro,
@@ -93,7 +101,7 @@ func _setup_click_chat_ui() -> void:
 	_chat_panel.anchor_bottom = 1.0
 	_chat_panel.offset_left = -240.0
 	_chat_panel.offset_right = 240.0
-	_chat_panel.offset_top = -118.0
+	_chat_panel.offset_top = -260.0
 	_chat_panel.offset_bottom = -24.0
 	_chat_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_chat_layer.add_child(_chat_panel)
@@ -116,6 +124,21 @@ func _setup_click_chat_ui() -> void:
 	close.focus_mode = Control.FOCUS_NONE
 	close.pressed.connect(_hide_chat_prompt)
 	row.add_child(close)
+
+	_chat_meta = Label.new()
+	_chat_meta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_meta.add_theme_font_size_override("font_size", 12)
+	box.add_child(_chat_meta)
+
+	_chat_tasks = Label.new()
+	_chat_tasks.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_tasks.add_theme_font_size_override("font_size", 12)
+	box.add_child(_chat_tasks)
+
+	_chat_recent = Label.new()
+	_chat_recent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_recent.add_theme_font_size_override("font_size", 11)
+	box.add_child(_chat_recent)
 
 	_chat_input = LineEdit.new()
 	_chat_input.placeholder_text = "Type a task or message"
@@ -197,11 +220,9 @@ func _open_chat_prompt(id: String) -> void:
 	if not is_instance_valid(_chat_panel):
 		return
 	_selected_chat_agent = id
-	var name := _agent_label(id)
-	_chat_title.text = "Chat with " + name
 	_chat_input.text = ""
-	_chat_input.placeholder_text = "Message " + name
 	_chat_panel.visible = true
+	_refresh_chat_panel()
 	_chat_input.grab_focus()
 	var node := _node_for_agent(id)
 	if is_instance_valid(node):
@@ -212,6 +233,76 @@ func _hide_chat_prompt() -> void:
 	if is_instance_valid(_chat_panel):
 		_chat_panel.visible = false
 	_selected_chat_agent = ""
+
+func _refresh_chat_panel() -> void:
+	if _selected_chat_agent == "" or not is_instance_valid(_chat_panel):
+		return
+	var id := _selected_chat_agent
+	var name := _agent_label(id)
+	var role := _agent_role(id)
+	var state := _agent_state(id)
+	var runtime := str(_agent_runtime.get(id, ""))
+	var session := str(_agent_sessions.get(id, ""))
+	var status := str(_agent_last_status.get(id, ""))
+	_chat_title.text = name
+	_chat_input.placeholder_text = "Message " + name
+	var bits: Array[String] = ["State: " + state]
+	if role != "":
+		bits.append("Role: " + role)
+	if runtime != "":
+		bits.append("Runtime: " + runtime)
+	if session != "":
+		bits.append("Session: " + session)
+	if status != "":
+		bits.append("Status: " + status)
+	_chat_meta.text = "  |  ".join(bits)
+	_chat_tasks.text = "Tasks: " + _agent_tasks_text(id)
+	_chat_recent.text = "Recent:\n" + _agent_recent_text(id)
+
+func _agent_role(id: String) -> String:
+	var node := _node_for_agent(id)
+	if is_instance_valid(node):
+		return str(node.agent_role)
+	if roster.has(id):
+		return str(roster[id].get("role", ""))
+	return ""
+
+func _agent_state(id: String) -> String:
+	if agents.has(id):
+		return str(agents[id].get("state", "idle"))
+	return "idle"
+
+func _agent_tasks_text(id: String) -> String:
+	var titles: Dictionary = _agent_task_titles.get(id, {})
+	var names: Array[String] = []
+	if agents.has(id):
+		var tasks: Dictionary = agents[id].get("tasks", {})
+		for task in tasks.keys():
+			names.append(str(titles.get(task, task)))
+	if names.is_empty():
+		return "none"
+	return ", ".join(names)
+
+func _agent_recent_text(id: String) -> String:
+	var lines: Array = _agent_recent.get(id, [])
+	if lines.is_empty():
+		return "No recent events"
+	var out: Array[String] = []
+	var start := maxi(0, lines.size() - 5)
+	for i in range(start, lines.size()):
+		out.append("- " + str(lines[i]))
+	return "\n".join(out)
+
+func _note_agent_event(id: String, text: String) -> void:
+	if id == "":
+		return
+	var lines: Array = _agent_recent.get(id, [])
+	lines.append(text.replace("\n", " ").left(96))
+	while lines.size() > 12:
+		lines.pop_front()
+	_agent_recent[id] = lines
+	if _selected_chat_agent == id and is_instance_valid(_chat_panel) and _chat_panel.visible:
+		_refresh_chat_panel()
 
 func _submit_chat_prompt() -> void:
 	if _selected_chat_agent == "":
@@ -225,11 +316,15 @@ func _submit_chat_prompt() -> void:
 	var node := _node_for_agent(agent)
 	if is_instance_valid(node):
 		node.set_status("sending...")
+	_agent_last_status[agent] = "sending..."
+	_note_agent_event(agent, "Message sent from office panel")
 	var err := _chat_req.request("http://127.0.0.1:8787/chat",
 		["content-type: application/json"], HTTPClient.METHOD_POST,
 		JSON.stringify({"agent": agent, "prompt": prompt}))
 	if err != OK and is_instance_valid(node):
 		node.set_status("chat failed: " + str(err))
+		_agent_last_status[agent] = "chat failed: " + str(err)
+		_note_agent_event(agent, "Chat request failed: " + str(err))
 
 func _on_chat_sent(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if _last_chat_agent == "":
@@ -239,9 +334,13 @@ func _on_chat_sent(_result: int, code: int, _headers: PackedStringArray, body: P
 		return
 	if code >= 200 and code < 300:
 		node.set_status("sent")
+		_agent_last_status[_last_chat_agent] = "sent"
+		_note_agent_event(_last_chat_agent, "Daemon accepted message")
 	else:
 		var text := body.get_string_from_utf8().strip_edges()
 		node.set_status(("chat failed " + str(code) + " " + text).left(42))
+		_agent_last_status[_last_chat_agent] = ("chat failed " + str(code)).left(42)
+		_note_agent_event(_last_chat_agent, ("Chat failed " + str(code) + " " + text).left(96))
 
 func _node_for_agent(id: String) -> Sprite3D:
 	if id == "ceo" and is_instance_valid(ceo):
@@ -492,6 +591,8 @@ func handle(evt: Dictionary) -> void:
 	var id := str(evt.get("agent", "agent"))
 	var task := str(evt.get("task", id))  # agent-as-task fallback (tier-1 adapters)
 	if type == "agent.offline":
+		_agent_last_status[id] = "offline"
+		_note_agent_event(id, "Agent went offline")
 		_to_dorm(id)
 		return
 	var a: Dictionary = _ensure(id)
@@ -505,8 +606,16 @@ func handle(evt: Dictionary) -> void:
 		_clear_status_later(a, 3.0)
 	match type:
 		"agent.online":
+			_agent_last_status[id] = "online"
+			_note_agent_event(id, "Agent online")
 			pass  # _ensure already spawned them
 		"task.started":
+			_agent_task_titles[id] = _agent_task_titles.get(id, {})
+			_agent_task_titles[id][task] = str(evt.get("title", task))
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "started"
+			_note_agent_event(id, "Started: " + str(evt.get("title", task)))
 			a.tasks[task] = true
 			_to_desk(a)
 			if not theatrical:
@@ -515,6 +624,10 @@ func handle(evt: Dictionary) -> void:
 				_focus_kick(a.node, 6.0)
 				world.board_set(task, "running", id, _face_for(id))
 		"task.progress":
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = str(evt.get("tool", "working..."))
+			_note_agent_event(id, "Progress: " + str(evt.get("tool", "working...")))
 			if a.state != "working":
 				a.tasks[task] = true
 				_to_desk(a)
@@ -522,6 +635,10 @@ func handle(evt: Dictionary) -> void:
 					world.board_set(task, "running", id, _face_for(id))
 			a.node.set_status(str(evt.get("tool", "working…")))
 		"task.completed":
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "completed"
+			_note_agent_event(id, "Completed: " + str(_agent_task_titles.get(id, {}).get(task, task)))
 			a.tasks.erase(task)
 			_fx(a, "success")
 			if not theatrical:
@@ -535,6 +652,10 @@ func handle(evt: Dictionary) -> void:
 				else:
 					_finish(a, "done ✓")
 		"task.failed":
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "failed"
+			_note_agent_event(id, "Failed: " + str(evt.get("reason", _agent_task_titles.get(id, {}).get(task, task))))
 			a.tasks.erase(task)
 			awaiting_delivery.erase(id)  # nothing to deliver
 			_fx(a, "failure")
@@ -546,6 +667,8 @@ func handle(evt: Dictionary) -> void:
 			if a.tasks.is_empty():
 				_finish(a, "failed ✗")
 		"perm.requested":
+			_agent_last_status[id] = "needs approval"
+			_note_agent_event(id, "Permission requested: " + str(evt.get("tool", task)))
 			if not theatrical:
 				Sfx.play("ding")
 				_maybe_focus(a.node, 0.85, 8.0)
@@ -558,6 +681,8 @@ func handle(evt: Dictionary) -> void:
 			_sec_pending[task] = true
 			_security_walk_after_grace(a, id, task)
 		"perm.approved":
+			_agent_last_status[id] = "permission approved"
+			_note_agent_event(id, "Permission approved")
 			_sec_pending.erase(task)
 			if not theatrical:
 				Sfx.play("blip2")
@@ -572,6 +697,8 @@ func handle(evt: Dictionary) -> void:
 			if not theatrical:
 				world.board_set(task, "running", id, _face_for(id))
 		"perm.denied":
+			_agent_last_status[id] = "permission denied"
+			_note_agent_event(id, "Permission denied")
 			_sec_pending.erase(task)
 			if not theatrical:
 				Sfx.play("buzz")
@@ -583,6 +710,8 @@ func handle(evt: Dictionary) -> void:
 			if a.tasks.is_empty():
 				_finish(a, ui("ปฏิเสธแล้ว ✗"))
 		"ceo.summon":
+			_agent_last_status[id] = "receiving order"
+			_note_agent_event(id, "Receiving CEO order")
 			# Chain of command: the Director comes over and TAILS the boss —
 			# truly walking together while the order is given.
 			if not theatrical:
@@ -599,6 +728,8 @@ func handle(evt: Dictionary) -> void:
 				Fx.spawn(ceo, "heart", Vector3(0, 1.3, 0))
 				_tail_ceo(a)
 		"task.delegated":
+			_agent_last_status[id] = "delegating"
+			_note_agent_event(id, "Delegated to " + str(evt.get("target", "")))
 			# ...then walks to the assignee, hands the work over, and STAYS
 			# on their heels until they report back. More than one delegate?
 			# Supervisor clones split off to shadow the rest.
@@ -649,10 +780,14 @@ func handle(evt: Dictionary) -> void:
 		"voice.say":
 			# An agent spoke out loud — show what they said as a speech bubble too.
 			if not evt.get("replay", false):
+				_agent_last_status[id] = "speaking"
+				_note_agent_event(id, "Voice: " + str(evt.get("text", "")).left(70))
 				a.node.set_status("🗣 " + str(evt.get("text", "")).left(30))
 				_fx(a, "music")
 				_clear_status_later(a, 6.0)
 		"skill.created":
+			_agent_last_status[id] = "learned skill"
+			_note_agent_event(id, "Learned skill: " + str(evt.get("skill", "")))
 			# Hermes moment: the agent distilled its work into a new skill.
 			if not theatrical:
 				Sfx.play("tada")
@@ -662,6 +797,10 @@ func handle(evt: Dictionary) -> void:
 		"chat.message":
 			# Speech bubble: first line of what the agent actually said.
 			var text := str(evt.get("text", "")).split("\n")[0]
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "message"
+			_note_agent_event(id, "Message: " + text.left(70))
 			if not evt.get("replay", false):
 				_fx(a, "music")
 				if not theatrical:
