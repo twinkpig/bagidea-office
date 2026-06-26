@@ -1155,8 +1155,8 @@ func _spawn_wildlife(spec: Dictionary) -> void:
 	animal.setup(str(spec.get("species", "rabbit")),
 		spec.get("roam", Vector2(1.4, 0.8)),
 		float(spec.get("speed", 0.6)))
-	_wildlife_root.add_child(animal)
 	animal.position = spec.get("pos", Vector3.ZERO)
+	_wildlife_root.add_child(animal)
 
 func _add_weather_particles(color: Color, amount: int, gravity: Vector3, size: Vector2,
 		vel_min: float, vel_max: float, lifetime: float) -> void:
