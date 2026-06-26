@@ -58,6 +58,14 @@ var _agent_sessions := {}
 var _agent_runtime := {}
 var _agent_last_status := {}
 
+func _office_hour() -> float:
+	var t := Time.get_time_dict_from_system()
+	return float(t.hour) + float(t.minute) / 60.0
+
+func _is_night_shift() -> bool:
+	var h := _office_hour()
+	return h < 5.8 or h >= 19.0
+
 func _ready() -> void:
 	# Hold off ambient cinematic close-ups so the OPENING shot is the CEO intro,
 	# not whichever staffer happens to move first.
@@ -1731,6 +1739,15 @@ func _idle_life_loop() -> void:
 		if pool.is_empty():
 			continue
 		var a: Dictionary = pool.pick_random()
+		if _is_night_shift() and randf() < 0.28:
+			var nr: float = randf()
+			if nr < 0.38:
+				_act_night_patrol(a)
+			elif nr < 0.70:
+				_act_late_shift(a)
+			else:
+				_act_night_tea(a, pool)
+			continue
 		# Weighted so the CAFE gets as much love as the REC room, with the odd
 		# wander to the server/meeting rooms (rare). Beds are handled by naps.
 		var r := randf()
@@ -1762,6 +1779,51 @@ func _idle_life_loop() -> void:
 			_act_explore(a)        # a rare peek at the server / meeting room
 		else:
 			_act_server_incident(a)  # 🔥 rare server-room emergency — agent rushes to fix
+
+func _act_night_patrol(a: Dictionary) -> void:
+	a.node.set_status(ui("ตรวจรอบกลางคืน 🔦"))
+	for spot in ["sec_window", "server_c", "lobby_c"]:
+		if a.state != "idle" or not is_instance_valid(a.node):
+			return
+		var d: float = _walk(a.node, spot)
+		await get_tree().create_timer(d + randf_range(1.2, 2.4)).timeout
+	if a.state == "idle":
+		Fx.spawn(a.node, "sparkle", Vector3(0, 1.1, 0), 0.02)
+		_maybe_focus(a.node, 0.45, 6.0)
+		_clear_status_later(a, 5.0)
+
+func _act_late_shift(a: Dictionary) -> void:
+	if a.state != "idle":
+		return
+	a.node.set_status(ui("กะดึกเงียบ ๆ 🌙"))
+	var desk: String = "lead_desk" if a.id == "main" else (desk_pool.pop_front() if desk_pool.size() > 0 else "ops_c")
+	var d: float = _walk(a.node, desk, a.node.DIR_UP)
+	await get_tree().create_timer(d + randf_range(10.0, 18.0)).timeout
+	if a.state == "idle":
+		a.node.set_status(ui("พักสายตา 🌙"))
+		if desk != "lead_desk" and desk != "ops_c":
+			desk_pool.append(desk)
+		_clear_status_later(a, 5.0)
+
+func _act_night_tea(a: Dictionary, pool: Array) -> void:
+	var others := pool.filter(func(o): return o.id != a.id and o.state == "idle")
+	if others.is_empty():
+		_act_late_shift(a)
+		return
+	var b: Dictionary = others.pick_random()
+	a.node.set_status(ui("ชงชารอบดึก 🍵"))
+	b.node.set_status(ui("คุยเบา ๆ 🍵"))
+	var cafe: Vector3 = world.WP.get("cafe_c", Vector3(7.2, 0.86, 0.2))
+	var da: float = a.node.walk_to(world.path_to(a.node.position, "cafe_c") + [cafe + Vector3(-0.65, 0, 0.35)])
+	var db: float = b.node.walk_to(world.path_to(b.node.position, "cafe_c") + [cafe + Vector3(0.65, 0, 0.35)])
+	await get_tree().create_timer(maxf(da, db) + randf_range(8.0, 14.0)).timeout
+	if a.state == "idle" and is_instance_valid(a.node):
+		_fx(a, "music")
+	if b.state == "idle" and is_instance_valid(b.node):
+		_fx(b, "music")
+	_maybe_focus(a.node, 0.55, 6.0)
+	_clear_status_later(a, 6.0)
+	_clear_status_later(b, 6.0)
 
 func _act_tv(a: Dictionary) -> void:
 	a.node.set_status(ui("ดูทีวี 📺"))
@@ -2062,7 +2124,8 @@ func _nap_loop() -> void:
 				continue
 			if now - float(a.get("idle_since", now)) < 180.0:
 				continue
-			if randf() < 0.5 and bed_pool.size() > 0:
+			var nap_chance: float = 0.78 if _is_night_shift() else 0.5
+			if randf() < nap_chance and bed_pool.size() > 0:
 				_take_nap(a)
 			else:
 				a["idle_since"] = now  # stays up — re-rolls in 3 minutes
