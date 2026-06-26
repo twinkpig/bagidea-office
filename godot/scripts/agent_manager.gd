@@ -114,15 +114,16 @@ func _setup_click_chat_ui() -> void:
 	_chat_panel.anchor_right = 0.5
 	_chat_panel.anchor_top = 1.0
 	_chat_panel.anchor_bottom = 1.0
-	_chat_panel.offset_left = -240.0
-	_chat_panel.offset_right = 240.0
-	_chat_panel.offset_top = -260.0
-	_chat_panel.offset_bottom = -24.0
+	_chat_panel.offset_left = -280.0
+	_chat_panel.offset_right = 280.0
+	_chat_panel.offset_top = -392.0
+	_chat_panel.offset_bottom = -72.0
 	_chat_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_chat_layer.add_child(_chat_panel)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_chat_panel.add_child(box)
 
 	var row := HBoxContainer.new()
@@ -159,18 +160,23 @@ func _setup_click_chat_ui() -> void:
 	_chat_recent = Label.new()
 	_chat_recent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_chat_recent.add_theme_font_size_override("font_size", 11)
+	_chat_recent.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(_chat_recent)
+
+	var input_row := HBoxContainer.new()
+	input_row.add_theme_constant_override("separation", 8)
+	box.add_child(input_row)
 
 	_chat_input = LineEdit.new()
 	_chat_input.placeholder_text = "Type a task or message"
 	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_input.text_submitted.connect(func(_text: String): _submit_chat_prompt())
-	box.add_child(_chat_input)
+	input_row.add_child(_chat_input)
 
 	var send := Button.new()
 	send.text = "Send"
 	send.pressed.connect(_submit_chat_prompt)
-	box.add_child(send)
+	input_row.add_child(send)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
@@ -335,7 +341,7 @@ func _agent_recent_text(id: String) -> String:
 	if lines.is_empty():
 		return "No recent events"
 	var out: Array[String] = []
-	var start := maxi(0, lines.size() - 5)
+	var start := maxi(0, lines.size() - 3)
 	for i in range(start, lines.size()):
 		out.append("- " + str(lines[i]))
 	return "\n".join(out)
