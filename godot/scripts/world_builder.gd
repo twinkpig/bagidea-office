@@ -112,7 +112,9 @@ var _ghost_deck: Node3D     # the floating sub-ops platform (movable from the ed
 var _billboard_logo: MeshInstance3D   # the brand sign face (user can swap its image)
 var _billboard_pending := ""          # billboard image requested before the sign was built
 const GRID_SCRIPT := preload("res://scripts/grid_world.gd")
+const WildlifeScript := preload("res://scripts/wildlife_sprite.gd")
 var _season_name := ""
+var _weather_name := "sunny"
 var _season_ground_mat: StandardMaterial3D
 var _season_grass_mat: ShaderMaterial
 var _season_leaf_mats: Array[StandardMaterial3D] = []
@@ -121,6 +123,7 @@ var _season_tree_spots: Array = []
 var _season_mountain_spots: Array = []
 var _season_fx_root: Node3D
 var _weather_fx_root: Node3D
+var _wildlife_root: Node3D
 # The rec TV: LOCAL position of Large_Monitor_White in its cell (mirrors
 # grid_world's `nw` for "rec"), and the screen-centre offset from that base.
 # Used to park the TV glow on the live monitor so it tracks room swaps.
@@ -1035,6 +1038,7 @@ func apply_season(season: String, force := false) -> void:
 			mat.albedo_color = mountain
 	_set_season_fx(s)
 	_update_fireflies()
+	_refresh_wildlife()
 
 func _set_season_fx(season: String) -> void:
 	if is_instance_valid(_season_fx_root):
@@ -1053,12 +1057,13 @@ func _set_season_fx(season: String) -> void:
 			_add_winter_snow_layers()
 
 func apply_weather(weather: String, season := "") -> void:
+	_weather_name = weather.to_lower()
 	if is_instance_valid(_weather_fx_root):
 		_weather_fx_root.queue_free()
 	_weather_fx_root = Node3D.new()
 	_weather_fx_root.name = "WeatherFX"
 	add_child(_weather_fx_root)
-	match weather:
+	match _weather_name:
 		"light_rain":
 			_add_weather_particles(Color(0.58, 0.72, 1.0, 0.62), 520, Vector3(0.12, -9.0, 0.0),
 				Vector2(0.014, 0.34), 12.0, 18.0, 0.95)
@@ -1068,6 +1073,90 @@ func apply_weather(weather: String, season := "") -> void:
 		"snow":
 			_add_weather_particles(Color(0.94, 0.98, 1.0, 0.82), 170, Vector3(0.04, -0.14, 0.0),
 				Vector2(0.045, 0.045), 0.35, 0.9, 8.5)
+	_refresh_wildlife()
+
+func _refresh_wildlife() -> void:
+	if is_instance_valid(_wildlife_root):
+		_wildlife_root.queue_free()
+	_wildlife_root = Node3D.new()
+	_wildlife_root.name = "Wildlife"
+	add_child(_wildlife_root)
+	for spec in _wildlife_specs(_season_name, _weather_name):
+		_spawn_wildlife(spec)
+
+func _wildlife_specs(season: String, weather: String) -> Array:
+	match weather:
+		"storm":
+			if season == "summer":
+				return [
+					{"species": "frog", "pos": Vector3(-21.0, 0.16, 17.5), "roam": Vector2(1.0, 0.8), "speed": 0.45},
+				]
+			return [
+				{"species": "crow", "pos": Vector3(24.0, 0.18, -16.5), "roam": Vector2(1.2, 0.5), "speed": 0.55},
+			]
+		"light_rain":
+			match season:
+				"spring":
+					return [
+						{"species": "frog", "pos": Vector3(-21.5, 0.16, 17.5), "roam": Vector2(1.2, 0.8), "speed": 0.5},
+						{"species": "duck", "pos": Vector3(22.0, 0.18, 16.8), "roam": Vector2(1.4, 0.8), "speed": 0.42},
+					]
+				"summer":
+					return [
+						{"species": "frog", "pos": Vector3(-21.5, 0.16, 17.5), "roam": Vector2(1.2, 0.8), "speed": 0.5},
+						{"species": "duck", "pos": Vector3(22.0, 0.18, 16.8), "roam": Vector2(1.4, 0.8), "speed": 0.42},
+						{"species": "butterfly", "pos": Vector3(-24.0, 0.75, 7.0), "roam": Vector2(1.4, 0.8), "speed": 0.75},
+					]
+				"autumn":
+					return [
+						{"species": "squirrel", "pos": Vector3(-24.0, 0.18, 4.8), "roam": Vector2(1.0, 0.7), "speed": 0.65},
+						{"species": "crow", "pos": Vector3(25.0, 0.18, -15.0), "roam": Vector2(1.2, 0.5), "speed": 0.55},
+					]
+				_:
+					return [
+						{"species": "snowbird", "pos": Vector3(-23.0, 0.65, -15.0), "roam": Vector2(1.2, 0.6), "speed": 0.6},
+					]
+		"snow":
+			return [
+				{"species": "snowrabbit", "pos": Vector3(-20.5, 0.18, 18.5), "roam": Vector2(1.1, 0.8), "speed": 0.42},
+				{"species": "snowbird", "pos": Vector3(24.0, 0.75, -16.0), "roam": Vector2(1.4, 0.7), "speed": 0.65},
+				{"species": "deer", "pos": Vector3(29.0, 0.18, 23.0), "roam": Vector2(1.5, 0.9), "speed": 0.38},
+			]
+	match season:
+		"spring":
+			return [
+				{"species": "rabbit", "pos": Vector3(-20.5, 0.18, 18.5), "roam": Vector2(1.5, 0.9), "speed": 0.62},
+				{"species": "butterfly", "pos": Vector3(-24.0, 0.85, 7.0), "roam": Vector2(1.6, 0.9), "speed": 0.82},
+				{"species": "duck", "pos": Vector3(22.0, 0.18, 16.8), "roam": Vector2(1.3, 0.8), "speed": 0.45},
+			]
+		"summer":
+			return [
+				{"species": "butterfly", "pos": Vector3(-24.0, 0.85, 7.0), "roam": Vector2(1.8, 1.0), "speed": 0.85},
+				{"species": "frog", "pos": Vector3(-21.5, 0.16, 17.5), "roam": Vector2(1.2, 0.8), "speed": 0.5},
+				{"species": "rabbit", "pos": Vector3(21.5, 0.18, 20.5), "roam": Vector2(1.5, 0.9), "speed": 0.62},
+			]
+		"autumn":
+			return [
+				{"species": "squirrel", "pos": Vector3(-24.0, 0.18, 4.8), "roam": Vector2(1.0, 0.7), "speed": 0.65},
+				{"species": "fox", "pos": Vector3(29.0, 0.18, 20.5), "roam": Vector2(1.6, 0.8), "speed": 0.55},
+				{"species": "crow", "pos": Vector3(25.0, 0.18, -15.0), "roam": Vector2(1.3, 0.5), "speed": 0.55},
+			]
+		"winter":
+			return [
+				{"species": "snowrabbit", "pos": Vector3(-20.5, 0.18, 18.5), "roam": Vector2(1.1, 0.8), "speed": 0.42},
+				{"species": "snowbird", "pos": Vector3(24.0, 0.75, -16.0), "roam": Vector2(1.4, 0.7), "speed": 0.65},
+				{"species": "deer", "pos": Vector3(29.0, 0.18, 23.0), "roam": Vector2(1.5, 0.9), "speed": 0.38},
+			]
+	return []
+
+func _spawn_wildlife(spec: Dictionary) -> void:
+	var animal := Sprite3D.new()
+	animal.set_script(WildlifeScript)
+	animal.setup(str(spec.get("species", "rabbit")),
+		spec.get("roam", Vector2(1.4, 0.8)),
+		float(spec.get("speed", 0.6)))
+	_wildlife_root.add_child(animal)
+	animal.position = spec.get("pos", Vector3.ZERO)
 
 func _add_weather_particles(color: Color, amount: int, gravity: Vector3, size: Vector2,
 		vel_min: float, vel_max: float, lifetime: float) -> void:
