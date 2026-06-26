@@ -29,6 +29,21 @@ const WEATHER_BY_SEASON := {
 	"autumn": ["sunny", "light_rain"],
 	"winter": ["sunny", "snow"],
 }
+const WEATHER_AUTO_BY_SEASON := {
+	"spring": [
+		"sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+		"sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+	],
+	"summer": [
+		"sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+		"sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "storm",
+	],
+	"autumn": [
+		"sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+		"sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+	],
+	"winter": ["sunny", "sunny", "sunny", "snow"],
+}
 
 var _day_timer := 0.0
 var _hour_override := -1.0
@@ -591,8 +606,15 @@ func _apply_weather(force := false) -> void:
 	if _season_name == "":
 		_apply_season(true)
 	var opts: Array = WEATHER_BY_SEASON.get(_season_name, WEATHER_BY_SEASON["spring"])
+	var auto_opts: Array = WEATHER_AUTO_BY_SEASON.get(_season_name, opts)
 	var slot := int(Time.get_unix_time_from_system() / 3600.0)
-	var weather: String = opts[(_weather_base_index(slot, _season_name, opts.size()) + _weather_offset) % opts.size()]
+	var base_weather: String = auto_opts[_weather_base_index(slot, _season_name, auto_opts.size())]
+	var weather: String = base_weather
+	if _weather_offset != 0:
+		var ix := opts.find(base_weather)
+		if ix < 0:
+			ix = 0
+		weather = opts[(ix + _weather_offset) % opts.size()]
 	if not force and weather == _weather_name:
 		return
 	_weather_name = weather

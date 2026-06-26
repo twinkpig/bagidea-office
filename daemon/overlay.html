@@ -5115,6 +5115,21 @@
     autumn: [["sunny", "Sunny"], ["light_rain", "Light rain"]],
     winter: [["sunny", "Sunny"], ["snow", "Snow"]],
   };
+  const WEATHER_AUTO_BY_SEASON = {
+    spring: [
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+    ],
+    summer: [
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "storm",
+    ],
+    autumn: [
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+    ],
+    winter: ["sunny", "sunny", "sunny", "snow"],
+  };
   let seasonOffset = 0;
   let weatherOffset = 0;
   let mapOpen = false, lastPos = [];
@@ -5127,9 +5142,13 @@
   function weatherNow() {
     const season = seasonNow()[0];
     const opts = WEATHER_BY_SEASON[season] || WEATHER_BY_SEASON.spring;
+    const autoOpts = WEATHER_AUTO_BY_SEASON[season] || opts.map((x) => x[0]);
     const slot = Math.floor(Date.now() / 3600000);
     const base = Math.abs(Math.imul(slot ^ (season.length * 131), 1103515245) + 12345);
-    return { season, opts, cur: opts[(base + weatherOffset) % opts.length] };
+    const baseWeather = autoOpts[base % autoOpts.length];
+    const baseIx = Math.max(0, opts.findIndex((x) => x[0] === baseWeather));
+    const ix = weatherOffset === 0 ? baseIx : (baseIx + weatherOffset) % opts.length;
+    return { season, opts, cur: opts[ix] };
   }
 
   function openMap() {

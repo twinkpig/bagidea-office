@@ -5289,9 +5289,25 @@ const server = http.createServer((req, res) => {
           autumn: ["sunny", "light_rain"],
           winter: ["sunny", "snow"],
         };
+        const autoWeatherBySeason = {
+          spring: [
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+          ],
+          summer: [
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "storm",
+          ],
+          autumn: [
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+          ],
+          winter: ["sunny", "sunny", "sunny", "snow"],
+        };
         const now = new Date();
         const season = seasons[(Math.floor(now.getHours() / 2) + Number(reg.seasonOffset || 0)) % seasons.length];
         const opts = weatherBySeason[season] || weatherBySeason.spring;
+        const autoOpts = autoWeatherBySeason[season] || opts;
         const slot = Math.floor(now.getTime() / 3600000);
         let offset = Number(reg.weatherOffset || 0);
         if (Number.isFinite(Number(a.offset))) offset = Number(a.offset);
@@ -5300,7 +5316,9 @@ const server = http.createServer((req, res) => {
         reg.weatherOffset = offset;
         saveReg();
         const base = Math.abs(Math.imul(slot ^ (season.length * 131), 1103515245) + 12345);
-        const weather = opts[(base + offset) % opts.length];
+        const baseWeather = autoOpts[base % autoOpts.length];
+        const baseIx = Math.max(0, opts.indexOf(baseWeather));
+        const weather = offset === 0 ? baseWeather : opts[(baseIx + offset) % opts.length];
         broadcast({ type: "ui.weather", offset, season, weather }, false);
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: true, offset, season, weather }));
