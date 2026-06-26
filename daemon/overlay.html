@@ -820,6 +820,15 @@
     font-size: 9px; font-weight: 700; color: #fff; white-space: nowrap;
     background: rgba(5, 9, 16, 0.8); padding: 1px 6px; border-radius: 6px; margin-top: 2px;
   }
+  .mapicon .worktag {
+    position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+    max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 9px; color: #dbeafe; background: rgba(5, 9, 16, 0.86);
+    border: 1px solid rgba(94,200,255,0.35); padding: 1px 6px; border-radius: 6px; margin-bottom: 3px;
+  }
+  .maplegend { display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px;color:var(--dim);font-size:11px }
+  .maplegend span { display:inline-flex;align-items:center;gap:4px }
+  .maplegend i { width:8px;height:8px;border-radius:50%;display:inline-block }
   /* ID card */
   #idcard { text-align: center; }
   #idcard .portrait {
@@ -5160,12 +5169,22 @@
          <button id="weatherBtn" style="flex:0 0 auto"></button>
          <span class="meta">season every 2h · weather hourly</span>
        </div>
+       <div class="maplegend" id="mapLegend"></div>
        <div id="mapWrap"><img id="mapImg" src="/map/bg?t=${Date.now()}"
           onerror="this.style.minHeight='320px'">
         <div id="mapIcons" style="position:absolute;inset:0"></div></div>`;
     renderSeasonButton();
     renderWeatherButton();
+    renderMapLegend();
     renderMapIcons();
+  }
+
+  function renderMapLegend() {
+    const box = document.getElementById("mapLegend");
+    if (!box) return;
+    box.innerHTML = Object.entries(DOTS).map(([k, v]) =>
+      `<span><i style="background:${v}"></i>${k}</span>`).join("") +
+      `<span><i style="background:#a5b8ff"></i>ghost</span>`;
   }
 
   function renderSeasonButton() {
@@ -5221,9 +5240,16 @@
       ic.style.backgroundSize = `${256 * k}px ${512 * k}px`;
       ic.style.backgroundPosition = `${-14 * k}px ${-14 * k}px`;
       const label = isGhost ? `👻 ${nameOf(baseId)}` : nameOf(p.id);
-      ic.innerHTML = `<div class="tag">${label}</div>`;
-      ic.title = `${label} — ${p.state}`;
-      if (!isGhost) ic.onclick = () => { closeModal(); setTarget(p.id); };
+      const task = Array.isArray(p.tasks) && p.tasks.length ? p.tasks[0] : "";
+      const tool = p.tool || "";
+      const elapsed = p.elapsed || "";
+      const work = task || tool || elapsed ? `${elapsed ? elapsed + " · " : ""}${tool || task}` : "";
+      ic.innerHTML = `${work ? `<div class="worktag">${esc(work)}</div>` : ""}<div class="tag">${label}</div>`;
+      ic.title = `${label} — ${p.state}${task ? "\n" + task : ""}${tool ? "\n" + tool : ""}${p.session ? "\nthread: " + p.session : ""}`;
+      if (!isGhost) ic.onclick = () => {
+        setTarget(p.id);
+        if (p.session) { SESS[p.id] = p.session; CUR[p.id] = p.session; refreshThreadBar(true); }
+      };
       box.appendChild(ic);
     }
   }
@@ -5551,15 +5577,18 @@
       }
       if (missions[key]) { missions[key].tool = ev.tool; renderMissions(); }
       ensureAgent(ev.agent, "working");
+      if (mapOpen) renderMapIcons();
     }
     else if (ev.type === "task.started") {
       missions[key] = { agent: ev.agent, state: "running" }; renderMissions();
       ensureAgent(ev.agent, "working");
+      if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) showTyping();
     }
     else if (ev.type === "task.completed") {
       if (missions[key]) { missions[key].state = "done"; renderMissions(); }
       ensureAgent(ev.agent, "idle");
+      if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) hideTyping();
       // Live context-usage meter for the thread the user is watching.
       if (!ev.replay && ev.usage && ev.agent === sessAgent() && !groupView &&
@@ -5571,6 +5600,7 @@
     else if (ev.type === "task.failed") {
       if (missions[key]) { missions[key].state = "failed"; renderMissions(); }
       ensureAgent(ev.agent, "idle");
+      if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) hideTyping();
     }
     else if (ev.type === "thread.switch") {

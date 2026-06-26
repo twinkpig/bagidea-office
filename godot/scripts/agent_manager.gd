@@ -42,6 +42,7 @@ var _i18n_req: HTTPRequest
 var _pos_req: HTTPRequest
 var _pos_busy := false
 var _chat_req: HTTPRequest
+var _session_open_req: HTTPRequest
 var _chat_layer: CanvasLayer
 var _chat_panel: PanelContainer
 var _chat_title: Label
@@ -57,6 +58,9 @@ var _agent_task_titles := {}
 var _agent_sessions := {}
 var _agent_runtime := {}
 var _agent_last_status := {}
+var _agent_last_tool := {}
+var _agent_usage := {}
+var _agent_task_started_at := {}
 
 func _office_hour() -> float:
 	var t := Time.get_time_dict_from_system()
@@ -97,6 +101,9 @@ func _setup_click_chat_ui() -> void:
 	add_child(_chat_req)
 	_chat_req.request_completed.connect(_on_chat_sent)
 
+	_session_open_req = HTTPRequest.new()
+	add_child(_session_open_req)
+
 	_chat_layer = CanvasLayer.new()
 	_chat_layer.layer = 80
 	add_child(_chat_layer)
@@ -132,6 +139,12 @@ func _setup_click_chat_ui() -> void:
 	close.focus_mode = Control.FOCUS_NONE
 	close.pressed.connect(_hide_chat_prompt)
 	row.add_child(close)
+
+	var open_session := Button.new()
+	open_session.text = "Open session"
+	open_session.focus_mode = Control.FOCUS_NONE
+	open_session.pressed.connect(_open_selected_session)
+	row.add_child(open_session)
 
 	_chat_meta = Label.new()
 	_chat_meta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -252,6 +265,9 @@ func _refresh_chat_panel() -> void:
 	var runtime := str(_agent_runtime.get(id, ""))
 	var session := str(_agent_sessions.get(id, ""))
 	var status := str(_agent_last_status.get(id, ""))
+	var tool := str(_agent_last_tool.get(id, ""))
+	var elapsed := _agent_elapsed_text(id)
+	var usage := _agent_usage_text(id)
 	_chat_title.text = name
 	_chat_input.placeholder_text = "Message " + name
 	var bits: Array[String] = ["State: " + state]
@@ -263,6 +279,12 @@ func _refresh_chat_panel() -> void:
 		bits.append("Session: " + session)
 	if status != "":
 		bits.append("Status: " + status)
+	if tool != "":
+		bits.append("Tool: " + tool)
+	if elapsed != "":
+		bits.append("Elapsed: " + elapsed)
+	if usage != "":
+		bits.append("Usage: " + usage)
 	_chat_meta.text = "  |  ".join(bits)
 	_chat_tasks.text = "Tasks: " + _agent_tasks_text(id)
 	_chat_recent.text = "Recent:\n" + _agent_recent_text(id)
@@ -290,6 +312,23 @@ func _agent_tasks_text(id: String) -> String:
 	if names.is_empty():
 		return "none"
 	return ", ".join(names)
+
+func _agent_elapsed_text(id: String) -> String:
+	var started := float(_agent_task_started_at.get(id, 0.0))
+	if started <= 0.0:
+		return ""
+	var seconds := maxi(0, int(Time.get_unix_time_from_system() - started))
+	return "%02d:%02d" % [seconds / 60, seconds % 60]
+
+func _agent_usage_text(id: String) -> String:
+	var u: Dictionary = _agent_usage.get(id, {})
+	if u.is_empty():
+		return ""
+	var input := int(u.get("in", 0))
+	var win := int(u.get("win", 0))
+	if win > 0:
+		return str(input) + "/" + str(win)
+	return str(input)
 
 func _agent_recent_text(id: String) -> String:
 	var lines: Array = _agent_recent.get(id, [])
@@ -350,6 +389,20 @@ func _on_chat_sent(_result: int, code: int, _headers: PackedStringArray, body: P
 		_agent_last_status[_last_chat_agent] = ("chat failed " + str(code)).left(42)
 		_note_agent_event(_last_chat_agent, ("Chat failed " + str(code) + " " + text).left(96))
 
+func _open_selected_session() -> void:
+	if _selected_chat_agent == "" or not is_instance_valid(_session_open_req):
+		return
+	if _session_open_req.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		return
+	var session := str(_agent_sessions.get(_selected_chat_agent, ""))
+	var err := _session_open_req.request("http://127.0.0.1:8787/sessions/open",
+		["content-type: application/json", "x-bagidea-ui: 1"], HTTPClient.METHOD_POST,
+		JSON.stringify({"agent": _selected_chat_agent, "session": session}))
+	if err == OK:
+		_note_agent_event(_selected_chat_agent, "Opening session terminal")
+	else:
+		_note_agent_event(_selected_chat_agent, "Open session failed: " + str(err))
+
 func _node_for_agent(id: String) -> Sprite3D:
 	if id == "ceo" and is_instance_valid(ceo):
 		return ceo
@@ -390,8 +443,15 @@ func _stream_positions() -> void:
 	for id in agents:
 		var a: Dictionary = agents[id]
 		if is_instance_valid(a.node):
+			var titles: Dictionary = _agent_task_titles.get(id, {})
+			var task_names: Array[String] = []
+			for tk in Dictionary(a.get("tasks", {})).keys():
+				task_names.append(str(titles.get(tk, tk)))
 			list.append({"id": id, "x": a.node.position.x, "z": a.node.position.z,
-				"state": a.state})
+				"state": a.state, "tasks": task_names, "session": _agent_sessions.get(id, ""),
+				"runtime": _agent_runtime.get(id, ""), "tool": _agent_last_tool.get(id, ""),
+				"status": _agent_last_status.get(id, ""), "usage": _agent_usage.get(id, {}),
+				"elapsed": _agent_elapsed_text(id)})
 	if is_instance_valid(ceo) and not agents.has("ceo"):
 		list.append({"id": "ceo", "x": ceo.position.x, "z": ceo.position.z, "state": "idle"})
 	for sub in ghosts:
@@ -623,6 +683,8 @@ func handle(evt: Dictionary) -> void:
 			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
 			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
 			_agent_last_status[id] = "started"
+			_agent_last_tool.erase(id)
+			_agent_task_started_at[id] = Time.get_unix_time_from_system()
 			_note_agent_event(id, "Started: " + str(evt.get("title", task)))
 			a.tasks[task] = true
 			_to_desk(a)
@@ -635,6 +697,7 @@ func handle(evt: Dictionary) -> void:
 			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
 			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
 			_agent_last_status[id] = str(evt.get("tool", "working..."))
+			_agent_last_tool[id] = str(evt.get("tool", "working..."))
 			_note_agent_event(id, "Progress: " + str(evt.get("tool", "working...")))
 			if a.state != "working":
 				a.tasks[task] = true
@@ -646,6 +709,10 @@ func handle(evt: Dictionary) -> void:
 			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
 			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
 			_agent_last_status[id] = "completed"
+			_agent_last_tool.erase(id)
+			_agent_task_started_at.erase(id)
+			if evt.has("usage") and evt["usage"] is Dictionary:
+				_agent_usage[id] = evt["usage"]
 			_note_agent_event(id, "Completed: " + str(_agent_task_titles.get(id, {}).get(task, task)))
 			a.tasks.erase(task)
 			_fx(a, "success")
@@ -663,6 +730,8 @@ func handle(evt: Dictionary) -> void:
 			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
 			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
 			_agent_last_status[id] = "failed"
+			_agent_last_tool.erase(id)
+			_agent_task_started_at.erase(id)
 			_note_agent_event(id, "Failed: " + str(evt.get("reason", _agent_task_titles.get(id, {}).get(task, task))))
 			a.tasks.erase(task)
 			awaiting_delivery.erase(id)  # nothing to deliver
@@ -1782,15 +1851,40 @@ func _idle_life_loop() -> void:
 
 func _act_night_patrol(a: Dictionary) -> void:
 	a.node.set_status(ui("ตรวจรอบกลางคืน 🔦"))
+	var torch := _attach_patrol_light(a.node)
 	for spot in ["sec_window", "server_c", "lobby_c"]:
 		if a.state != "idle" or not is_instance_valid(a.node):
+			if is_instance_valid(torch):
+				torch.queue_free()
 			return
 		var d: float = _walk(a.node, spot)
 		await get_tree().create_timer(d + randf_range(1.2, 2.4)).timeout
+	if is_instance_valid(torch):
+		torch.queue_free()
 	if a.state == "idle":
 		Fx.spawn(a.node, "sparkle", Vector3(0, 1.1, 0), 0.02)
 		_maybe_focus(a.node, 0.45, 6.0)
 		_clear_status_later(a, 5.0)
+
+func _attach_patrol_light(node: Node3D) -> Node3D:
+	var rig := Node3D.new()
+	rig.name = "PatrolLight"
+	node.add_child(rig)
+	rig.position = Vector3(0, 0.7, -0.15)
+	var lamp := SpotLight3D.new()
+	lamp.light_color = Color(0.72, 0.84, 1.0)
+	lamp.light_energy = 1.8
+	lamp.spot_range = 8.0
+	lamp.spot_angle = 22.0
+	lamp.shadow_enabled = false
+	lamp.rotation_degrees = Vector3(-62.0, 0.0, 0.0)
+	rig.add_child(lamp)
+	var glow := OmniLight3D.new()
+	glow.light_color = Color(0.58, 0.72, 1.0)
+	glow.light_energy = 0.35
+	glow.omni_range = 2.6
+	rig.add_child(glow)
+	return rig
 
 func _act_late_shift(a: Dictionary) -> void:
 	if a.state != "idle":

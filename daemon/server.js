@@ -3782,6 +3782,58 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ sessions: list }));
 
+  } else if (req.method === "POST" && req.url === "/sessions/open") {
+    if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
+    readBody(req, (body) => {
+      try {
+        const { agent = "main", session = "" } = JSON.parse(body || "{}");
+        const list = sess[agent] || [];
+        const entry = String(session)
+          ? list.find((e) => e.key === session)
+          : list.slice().sort((a, b) => b.ts - a.ts)[0];
+        if (!entry) { res.writeHead(404); return res.end("session not found"); }
+        const dir = entry.proj && projectDir(entry.proj) ? projectDir(entry.proj) : WORKSPACE;
+        const rt = runtimeConfig.effectiveAgentRuntime(reg, agent);
+        const shq = (s) => "'" + String(s).replace(/'/g, "'\"'\"'") + "'";
+        const psq = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+        const psCommand = (s) => `-Command "${String(s).replace(/`/g, "``").replace(/"/g, "`\"")}"`;
+        const codexThread = entry.codexThread || "";
+        const codexCmd = codexThread ? `codex resume ${shq(codexThread)}` : "codex";
+        let resume;
+        if (rt === "codex") {
+          if (process.platform === "win32" && reg.codexUseWsl) {
+            const wslCwd = codexRuntime.mapWindowsPathToWsl(dir);
+            const distro = String(reg.codexWslDistro || "").trim();
+            const distroArg = distro ? `-d ${psq(distro)} ` : "";
+            resume = `wsl.exe ${distroArg}--exec /bin/sh -lc ${psq(`cd ${shq(wslCwd)} && exec ${codexCmd}`)}`;
+          } else {
+            resume = codexCmd;
+          }
+        } else {
+          resume = entry.sid ? `claude --resume ${shq(entry.sid)}` : "claude -c";
+        }
+        if (process.platform === "win32") {
+          const title = `BAGIDEA_${agent}_${entry.key}`.replace(/[^\w-]/g, "_");
+          const psCmd = psCommand(resume);
+          const line = HAS_WT
+            ? `/c start "" "${WT_EXE}" -w new new-tab --title "${title}" --suppressApplicationTitle -d "${dir}" powershell -NoLogo -NoExit -ExecutionPolicy Bypass ${psCmd}`
+            : `/c start "${title}" /D "${dir}" conhost.exe powershell -NoLogo -NoExit -ExecutionPolicy Bypass ${psCmd}`;
+          spawn("cmd.exe", [line], { windowsVerbatimArguments: true, windowsHide: true, detached: true });
+        } else if (process.platform === "darwin") {
+          const script = `tell application "Terminal" to do script "${appleScriptString(`cd ${shq(dir)} && ${resume}`)}"`;
+          spawn("osascript", ["-e", script], { detached: true });
+        } else {
+          spawn("x-terminal-emulator", ["-e", "bash", "-lc", `cd ${shq(dir)}; ${resume}; exec bash`],
+            { detached: true, stdio: "ignore" });
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
   } else if (req.method === "GET" && req.url === "/brains") {
     // Monitoring snapshot: every provider's connect status + every agent's brain
     // (provider/model) and latest context usage. Feeds the 🧠 BRAINS sidebar panel.
