@@ -516,14 +516,37 @@ func _apply_daylight() -> void:
 	var energy: float = lerpf(a[2], b[2], f)
 	var sun_col: Color = a[3].lerp(b[3], f)
 	var sky_col: Color = a[4].lerp(b[4], f)
+	var phase := "day"
+	if hour < 5.8 or hour >= 19.0:
+		phase = "night"
+	elif hour < 8.5:
+		phase = "dawn"
+	elif hour >= 17.3:
+		phase = "dusk"
 	if _weather_name != "" and _weather_name != "sunny":
 		energy = 0.0
 
 	$Sun.rotation_degrees = Vector3(pitch, 150.0, 0.0)
 	$Sun.light_energy = energy
 	$Sun.light_color = sun_col
+	if has_node("Moon"):
+		var moon: DirectionalLight3D = $Moon
+		var moon_energy := 0.0
+		if phase == "night":
+			moon_energy = 0.72
+		elif phase == "dusk" or phase == "dawn":
+			moon_energy = 0.28
+		if _weather_name != "" and _weather_name != "sunny":
+			moon_energy *= 0.45
+		moon.rotation_degrees = Vector3(-42.0, -35.0, 0.0)
+		moon.light_energy = moon_energy
 	var env: Environment = $WorldEnvironment.environment
-	env.ambient_light_energy = lerpf(a[5], b[5], f)
+	var ambient_energy := lerpf(a[5], b[5], f)
+	if phase == "night":
+		ambient_energy = maxf(ambient_energy, 1.05)
+	elif phase == "dusk" or phase == "dawn":
+		ambient_energy = maxf(ambient_energy, 1.15)
+	env.ambient_light_energy = ambient_energy
 	# Procedural sky is the IBL source (ambient + reflections) — keep its
 	# colors on the clock so glossy floors mirror dawn/day/night correctly.
 	if env.sky and env.sky.sky_material is ProceduralSkyMaterial:
@@ -533,13 +556,6 @@ func _apply_daylight() -> void:
 		sm.ground_horizon_color = sky_col * Color(0.75, 0.8, 0.7)
 	var world: Node3D = $World
 	# Roofline clock + phase icon + the day/night particle shift.
-	var phase := "day"
-	if hour < 5.8 or hour >= 19.0:
-		phase = "night"
-	elif hour < 8.5:
-		phase = "dawn"
-	elif hour >= 17.3:
-		phase = "dusk"
 	var mins := int(round(fmod(hour, 1.0) * 60.0)) % 60
 	world.update_clock("%02d:%02d" % [int(hour) % 24, mins], phase)
 	world.set_night_life(phase in ["dusk", "night"])

@@ -78,6 +78,17 @@ directional_shadow_mode = 0
 directional_shadow_max_distance = 100.0
 directional_shadow_pancake_size = 20.0
 
+[node name="Moon" type="DirectionalLight3D" parent="."]
+light_color = Color(0.62, 0.72, 1, 1)
+light_energy = 0.0
+shadow_enabled = true
+shadow_bias = 0.04
+shadow_normal_bias = 0.7
+shadow_blur = 1.2
+directional_shadow_mode = 0
+directional_shadow_max_distance = 100.0
+directional_shadow_pancake_size = 20.0
+
 [node name="CameraRig" type="Node3D" parent="."]
 script = ExtResource("2")
 target = Vector3(0.0, 0.6, -0.5)
