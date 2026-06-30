@@ -3,7 +3,13 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { trimLines, rotateJournal, pruneSessions } = require("../maintenance");
+const {
+  trimLines,
+  rotateJournal,
+  pruneSessions,
+  normalizeSessions,
+  cleanLegacyRuntimeNoise,
+} = require("../maintenance");
 
 test("trimLines keeps the newest N", () => {
   assert.deepStrictEqual(trimLines([1, 2, 3, 4, 5], 3), [3, 4, 5]);
@@ -67,4 +73,55 @@ test("pruneSessions leaves a single-thread / empty agent alone", () => {
   const r = pruneSessions({ a: [{ key: "only", ts: 1 }], b: [] }, { now: 9e15 });
   assert.strictEqual(r.changed, false);
   assert.deepStrictEqual(r.sess.a.map((t) => t.key), ["only"]);
+});
+
+test("normalizeSessions migrates old Thai system health-check titles", () => {
+  const sess = {
+    main: [{
+      key: "s1",
+      title: "💓 รอบตรวจความเรียบร้อย",
+      ts: 1,
+      log: [
+        { who: "you", text: "💓 รอบตรวจความเรียบร้อย", ts: 1 },
+        { who: "agent", text: "normal reply", ts: 2 },
+      ],
+    }],
+  };
+
+  const r = normalizeSessions(sess);
+
+  assert.strictEqual(r.changed, true);
+  assert.strictEqual(r.rewritten, 2);
+  assert.strictEqual(r.sess.main[0].title, "💓 Health check");
+  assert.strictEqual(r.sess.main[0].log[0].text, "💓 Health check");
+  assert.strictEqual(r.sess.main[0].log[1].text, "normal reply");
+});
+
+test("cleanLegacyRuntimeNoise removes WSL proxy and shell init noise", () => {
+  const input = [
+    "正常回复",
+    "w\u0000s\u0000l\u0000:\u0000 检测到 localhost 代理配置，但未镜像到 WSL。NAT 模式下的 WSL 不支持 localhost 代理。",
+    "/bin/sh: 1: eval: source: not found",
+  ].join("\n");
+  assert.strictEqual(cleanLegacyRuntimeNoise(input), "正常回复");
+});
+
+test("normalizeSessions strips legacy runtime warning-only log entries", () => {
+  const sess = {
+    researcher: [{
+      key: "s1",
+      title: "old",
+      ts: 1,
+      log: [
+        { who: "you", text: "hi", ts: 1 },
+        { who: "agent", text: "w\u0000s\u0000l\u0000:\u0000 localhost proxy WSL NAT\n/bin/sh: 1: eval: source: not found", ts: 2 },
+        { who: "agent", text: "OK\nw\u0000s\u0000l\u0000:\u0000 localhost proxy WSL NAT", ts: 3 },
+      ],
+    }],
+  };
+
+  const r = normalizeSessions(sess);
+
+  assert.strictEqual(r.changed, true);
+  assert.deepStrictEqual(r.sess.researcher[0].log.map((e) => e.text), ["hi", "OK"]);
 });

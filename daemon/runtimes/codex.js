@@ -1,5 +1,8 @@
 "use strict";
 
+const cliOutput = require("./cli-output");
+const wslLite = require("./wsl-lite");
+
 function codexExecArgs({ cwd, threadId }) {
   const args = ["exec", "--json", "-C", String(cwd || ".")];
   if (threadId) args.push("resume", String(threadId), "-");
@@ -48,19 +51,8 @@ function mapWindowsPathToWsl(input) {
   return p;
 }
 
-function wslUserShellArgs(commandArgs, distro) {
-  const commandLine = shellJoin(commandArgs);
-  const inner = "if [ -f ~/.zshrc ]; then . ~/.zshrc >/dev/null 2>&1 || true; fi; " +
-    "if [ -f ~/.profile ]; then . ~/.profile >/dev/null 2>&1 || true; fi; " +
-    "exec " + commandLine;
-  const script = "shell=\"${SHELL:-}\"; " +
-    "if [ -z \"$shell\" ] || [ ! -x \"$shell\" ]; then shell=$(getent passwd \"$(id -un)\" | cut -d: -f7 2>/dev/null || true); fi; " +
-    "if [ -z \"$shell\" ] || [ ! -x \"$shell\" ]; then shell=/bin/sh; fi; " +
-    "exec \"$shell\" -lc " + shellQuote(inner);
-  const args = [];
-  if (distro) args.push("-d", String(distro));
-  args.push("--exec", "/bin/sh", "-lc", script);
-  return args;
+function wslUserShellArgs(commandArgs, distro, options = {}) {
+  return wslLite.wslLiteShellArgs(commandArgs, distro, options);
 }
 
 function codexSpawnSpec({ platform = process.platform, cwd, threadId, useWsl, distro }) {
@@ -89,14 +81,32 @@ function codexVersionSpawnSpec({ platform = process.platform, useWsl, distro }) 
   return { command: "codex", args: ["--version"], shell: false };
 }
 
+function codexInteractiveArgs({ threadId }) {
+  return threadId ? ["resume", String(threadId)] : [];
+}
+
+function codexInteractiveSpawnSpec({ platform = process.platform, cwd, threadId, useWsl, distro }) {
+  const localCwd = String(cwd || ".");
+  if (platform === "win32" && useWsl) {
+    const wslCwd = mapWindowsPathToWsl(localCwd);
+    const args = wslUserShellArgs(["codex", ...codexInteractiveArgs({ threadId })], distro, { cwd: wslCwd });
+    return { command: "wsl.exe", args, cwd: localCwd, shell: false };
+  }
+  return {
+    command: "codex",
+    args: codexInteractiveArgs({ threadId }),
+    cwd: localCwd,
+    shell: false,
+  };
+}
+
 function parseVersionOutput(out) {
-  const lines = String(out || "").replace(/\0/g, "").split(/\r?\n/)
-    .map((s) => s.trim()).filter(Boolean);
-  return lines.find((s) => /^codex(?:-cli)?\b/i.test(s) || /\bcodex\b/i.test(s)) || lines[0] || "";
+  return cliOutput.parseVersionOutput(out, [/^codex(?:-cli)?\b/i, /\bcodex\b/i]);
 }
 
 module.exports = {
   codexExecArgs,
+  codexInteractiveSpawnSpec,
   codexSpawnSpec,
   codexVersionSpawnSpec,
   parseCodexJsonLine,
@@ -104,4 +114,5 @@ module.exports = {
   codexTextFromEvent,
   mapWindowsPathToWsl,
   parseVersionOutput,
+  cleanCliDiagnostic: cliOutput.cleanCliDiagnostic,
 };

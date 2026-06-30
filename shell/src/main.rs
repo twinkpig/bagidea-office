@@ -35,7 +35,7 @@ const ORB_SIZE: f64 = 39.0; // window; the orb art is inset so a thin transparen
                             // clip then cuts empty space, not the glow against the wallpaper.
 const FULL: (f64, f64) = (560.0, 700.0);
 const MINI: (f64, f64) = (390.0, 430.0);
-const FEED_W: f64 = 330.0;
+const FEED_W: f64 = 360.0;
 const PARK: (f64, f64) = (-9000.0, 100.0);
 const SPLASH_SIZE: f64 = 210.0;
 const ORB_RIGHT_MARGIN: f64 = 96.0;
@@ -2274,7 +2274,7 @@ fn main() {
         .unwrap_or((default_orb_x, default_orb_y));
     let overlay_x = (logical_w - FULL.0 - ORB_SIZE * 2.2).max(20.0);
     let overlay_y = 90.0;
-    let feed_h = (logical_h * 0.5).clamp(320.0, 560.0);
+    let feed_h = (logical_h * 0.56).clamp(360.0, 620.0);
     let feed_x = logical_w - FEED_W - 8.0;
     let feed_y = logical_h - feed_h - 64.0;
 
@@ -2378,7 +2378,7 @@ fn main() {
     let mut popups: Vec<(tao::window::WindowId, String, Window, wry::WebView)> = Vec::new();
     let mut mini = false;
     let mut feed = false;
-    let mut overlay_fullscreen = false;
+    let mut overlay_fullscreen = true;
     let mut editor_pid: u32 = 0;
     let mut world_ready = false;
     // Tracks whether the wallpaper is believed visible (30 fps) vs throttled
@@ -2500,7 +2500,13 @@ fn main() {
                 .map(|p| p.x < -2000)
                 .unwrap_or(true);
             if hidden {
-                let (px, py) = if overlay_fullscreen {
+                if overlay_fullscreen && !feed_now {
+                    overlay.set_inner_size(LogicalSize::new(logical_w, logical_h));
+                    platform::region_round(&overlay, logical_w, logical_h, 0.0);
+                    let _ = overlay_view
+                        .evaluate_script("window.setFullscreenMode && setFullscreenMode(true)");
+                }
+                let (px, py) = if overlay_fullscreen && !feed_now {
                     (0.0, 0.0)
                 } else if feed_now {
                     (feed_x, feed_y)
@@ -2700,7 +2706,14 @@ fn main() {
                             .map(|p| p.x < -2000)
                             .unwrap_or(true);
                         if hidden {
-                            let (px, py) = if overlay_fullscreen {
+                            if overlay_fullscreen && !feed {
+                                overlay.set_inner_size(LogicalSize::new(logical_w, logical_h));
+                                platform::region_round(&overlay, logical_w, logical_h, 0.0);
+                                let _ = overlay_view.evaluate_script(
+                                    "window.setFullscreenMode && setFullscreenMode(true)",
+                                );
+                            }
+                            let (px, py) = if overlay_fullscreen && !feed {
                                 (0.0, 0.0)
                             } else if feed {
                                 (feed_x, feed_y)

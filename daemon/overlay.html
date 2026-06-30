@@ -284,6 +284,11 @@
     font-size: 11px; color: var(--dim); padding: 2.5px 2px;
     border-bottom: 1px dashed rgba(255,255,255,0.05); line-height: 1.45;
   }
+  #activity {
+    max-height: 190px;
+    overflow-y: auto;
+    padding-right: 3px;
+  }
   #activity .act b { color: #cfe3ff; font-weight: 600; }
   #activity .act .t { color: rgba(160,170,190,0.55); font-size: 10px; margin-right: 5px; }
 
@@ -335,9 +340,9 @@
   .orgrow:first-child .orgseat { border-color: rgba(255,200,90,0.55);
     background: rgba(255,180,60,0.07); }
 
-  /* ---- 📡 feed mode: a pure overlay — no chrome, no buttons, no input ---- */
+  /* ---- 📡 feed mode: a focused office activity view with quick command input ---- */
   #feed, #feedHead { display: none; }
-  body.feedmode main, body.feedmode footer, body.feedmode #rail,
+  body.feedmode main, body.feedmode #rail,
   body.feedmode #threadBar, body.feedmode #sideTab,
   body.feedmode header { display: none !important; }
   /* Belt + braces: popups can NEVER haunt the feed strip, whatever JS state
@@ -364,10 +369,20 @@
   /* column-reverse = newest sits at the bottom AND history scrolls naturally */
   body.feedmode #feed {
     display: flex; flex-direction: column-reverse; gap: 5px;
-    position: fixed; top: 34px; bottom: 6px; left: 6px; right: 6px;
+    position: fixed; top: 34px; bottom: 52px; left: 6px; right: 6px;
     overflow-y: auto; padding: 2px;
     mask-image: linear-gradient(to bottom, transparent, black 12%);
   }
+  body.feedmode footer {
+    display: flex !important;
+    position: fixed; left: 6px; right: 6px; bottom: 6px; z-index: 20;
+    padding: 5px; border: 1px solid var(--line); border-radius: 12px;
+    background: rgba(10, 16, 28, 0.92);
+  }
+  body.feedmode footer #attachBtn,
+  body.feedmode footer #liveBtn,
+  body.feedmode footer #sessBtn { display: none !important; }
+  body.feedmode footer #inp { height: 32px; min-height: 32px; }
   .fitem .fpbtns { display: flex; gap: 5px; margin-top: 5px; }
   .fitem .fpbtns button {
     flex: 1; padding: 3px 6px; font-size: 10.5px; cursor: pointer;
@@ -395,10 +410,10 @@
   #updBar.on { display: block; }
   #updBar:hover { background: rgba(255,176,84,0.2); }
   body.feedmode #updBar { display: none !important; }
-  /* voice-hotkey tip — only visible in feed mode (where there's no input box) */
+  /* voice-hotkey tip — hidden in feed mode now that the command input is visible */
   #feedTip { display: none; }
   body.feedmode #feedTip {
-    display: block; margin: 8px 14px 2px; padding: 8px 11px;
+    display: none; margin: 8px 14px 2px; padding: 8px 11px;
     font-size: 11px; line-height: 1.5; color: rgba(190, 215, 255, 0.9);
     background: rgba(94,200,255,0.08); border: 1px solid var(--line); border-radius: 10px;
   }
@@ -663,6 +678,29 @@
     overflow-wrap: break-word; word-break: break-word; height: 34px;
   }
   footer #inp:focus { border-color: var(--accent); }
+  #mentionMenu {
+    display: none; position: fixed; z-index: 260; min-width: 210px; max-width: min(320px, calc(100vw - 24px));
+    max-height: 220px; overflow-y: auto; padding: 6px;
+    background: rgba(13, 19, 32, 0.98); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.62); backdrop-filter: blur(12px);
+  }
+  #mentionMenu.open { display: block; }
+  #mentionMenu .opt {
+    display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center;
+    padding: 7px 9px; border-radius: 8px; cursor: pointer;
+  }
+  #mentionMenu .opt:hover, #mentionMenu .opt.active { background: rgba(94,200,255,0.14); }
+  #mentionMenu .face {
+    width: 28px; height: 28px; border-radius: 7px; background-color: #1c2740;
+    outline: 1px solid rgba(255,255,255,0.12);
+  }
+  #mentionMenu b { display: block; color: var(--text); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mentionMenu small { display: block; color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mentionMenu .mrun {
+    justify-self: end; max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #9fdcff; border: 1px solid rgba(94,200,255,0.28); border-radius: 999px;
+    background: rgba(94,200,255,0.08); padding: 2px 6px; font-size: 10px; line-height: 1.25;
+  }
   /* The resting hint is small + subtle so the empty box stays compact; what you
      TYPE is full-size. (Mini window shrinks the hint a touch more.) */
   footer #inp::placeholder, .assistrow textarea::placeholder { font-size: 12px; opacity: 0.7; }
@@ -727,6 +765,7 @@
   .arow .meta .brain { font-size: 10.5px; color: rgba(94,200,255,0.85); }
   .arow .meta .runtime { display: inline-block !important; font-size: 10.5px; color: #9fe7c3; margin-left: 7px; }
   .arow .meta .runtime.codex { color: #ffd28a; }
+  .arow .meta .runtime.hermes { color: #c9b6ff; }
   .arow .meta .runtime.claude { color: #9fe7c3; }
   /* Fixed-height rows: confirm messages swap in-place, never reflow the list */
   .arow .meta b, .arow .meta span {
@@ -876,7 +915,6 @@
   <button id="moreBtn" title="เพิ่มเติม" style="margin-left:6px">⋯</button>
   <button id="sideBtn" title="Security Center & Mission Control" style="margin-left:6px">🛡<span id="permBadge"></span></button>
   <div class="winbtn" id="fullBtn" title="Fullscreen chat" style="margin-left:6px"></div>
-  <div class="winbtn" id="miniBtn" title="Mini window" style="margin-left:6px"></div>
   <div class="winbtn hide" id="hideBtn" title="Hide (chat head brings it back)">—</div>
 </header>
 <!-- ⋯ overflow menu: secondary tools, so the header never overflows -->
@@ -945,7 +983,7 @@
   <span id="pttTxt">กำลังฟัง…</span>
   <span class="hint" id="pttHint"></span></div>
 
-<div id="threadBar">🧵 thread: <b id="threadName">ล่าสุด (ต่อเนื่องอัตโนมัติ)</b><span id="threadCtx" style="color:var(--dim);font-size:10.5px"></span></div>
+<div id="threadBar">🧵 thread: <b id="threadName">Latest (auto-continued)</b><span id="threadCtx" style="color:var(--dim);font-size:10.5px"></span></div>
 <div id="attachRow"></div>
 <footer>
   <textarea id="inp" rows="1" placeholder="Message Main…   ⏎ send · ⇧⏎ new line"
@@ -960,6 +998,7 @@
 
 <div id="dayMenu"></div>
 <div id="sessMenu"></div>
+<div id="mentionMenu"></div>
 
 <!-- 📂 In-house folder picker (Blender-style) — no Windows dialogs. -->
 <div id="fsPick">
@@ -1199,6 +1238,42 @@
   // Dynamic content (chat, feed, agent names, thread titles, live counters)
   // must NOT be machine-translated — only UI chrome. Skip these subtrees.
   const NO_I18N = new Set(["log", "feed", "feedTasks", "rail", "companion", "nowStrip", "threadName", "pttTxt", "inp"]);
+  const ACTIVITY_FILTER = {
+    showFeed(ev) {
+      if (!ev || ev.replay || ev.theater) return false;
+      if (ev.type === "chat.message") return false;
+      if (ev.type === "task.progress") return false;
+      if (ev.type === "task.started" && /^📨\s*Report from\b/i.test(String(ev.title || ""))) return false;
+      return new Set([
+        "task.started", "task.progress", "task.completed", "task.failed", "task.delegated",
+        "subagent.progress", "subagent.spawned", "subagent.done", "subagent.split",
+        "perm.requested", "perm.approved", "perm.denied",
+        "ceo.summon", "ceo.report", "collab.started", "collab.ended",
+        "skill.created", "memory.learned", "channel.message",
+        "proposal.created", "proposal.approved", "proposal.rejected",
+        "voice.say", "update.available",
+      ]).has(ev.type);
+    },
+    showThread(row) {
+      return !!row && !row.social && !row.ambient;
+    },
+  };
+  function taskTitleVisible(title) {
+    const s = String(title || "").trim();
+    if (!s) return "";
+    if (/^📨\s*Report from\b/i.test(s)) return "";
+    if (s === "💓 Health check") return "";
+    return s;
+  }
+  function friendlyFailureReason(reason, runtime) {
+    const s = String(reason || "");
+    const rt = String(runtime || "").toLowerCase();
+    if (/spawn\s+hermes\s+ENOENT/i.test(s)) return "Hermes CLI 未找到，请先安装 Hermes 或把该 agent 切回 Claude/Codex";
+    if (/spawn\s+codex\s+ENOENT/i.test(s)) return "Codex CLI 未找到，请先安装 Codex 或开启 WSL bridge";
+    if (/spawn\s+claude\s+ENOENT/i.test(s)) return "Claude Code CLI 未找到，请检查 Claude/WSL 配置";
+    if (/ENOENT/i.test(s) && rt) return `${runtimeName(rt)} CLI 未找到`;
+    return s ? s.slice(0, 120) : "";
+  }
   function inNoI18n(node) {
     let el = node.nodeType === 1 ? node : node.parentElement;
     while (el) { if (el.id && NO_I18N.has(el.id)) return true; el = el.parentElement; }
@@ -1298,16 +1373,21 @@
   // Live registry from the daemon (roster.sync) — identity source of truth.
   let ROSTER = {}, REGROLES = [], REGROLEPROFILES = {}, REGSKILLS = {}, REGTOOLS = [], AUTOSKILLS = true, VERIFY = false;
   let BUILTIN_DESC = {}, REGMCP = {}, SOUND = true, HEARTBEAT = 0;
-  let DEFAULT_RUNTIME = "claude", RUNTIMES = ["claude", "codex"];
+  let DEFAULT_RUNTIME = "claude", RUNTIMES = ["claude", "codex", "hermes"];
   let FEATURES = { openai: false, gemini: false, stt: false, tts: false, live: false, image: false };
   let TTSON = true, SOCIALMIN = 60, MAXSTAFF = 18, PROPOSALMIN = 120, UPDATECHECKS = false;
   let PROJECTS_CACHE = [];
   let _plistScroll = 0, _plistQ = "";  // preserve project-list scroll + search across live refreshes
   function normRuntime(v) {
     v = String(v || "").trim().toLowerCase();
-    return v === "codex" || v === "claude" ? v : "";
+    return v === "codex" || v === "claude" || v === "hermes" ? v : "";
   }
-  function runtimeName(v) { return normRuntime(v) === "codex" ? "Codex" : "Claude Code"; }
+  function runtimeName(v) {
+    const rt = normRuntime(v);
+    if (rt === "codex") return "Codex";
+    if (rt === "hermes") return "Hermes";
+    return "Claude Code";
+  }
   function roleProfile(role) {
     const p = REGROLEPROFILES && REGROLEPROFILES[String(role || "")];
     return p && typeof p === "object" ? p : {};
@@ -1339,6 +1419,29 @@
   }
   function nameOf(id) {
     return (ROSTER[id] && ROSTER[id].name) || id[0].toUpperCase() + id.slice(1);
+  }
+  function staffIds() {
+    return Object.keys(ROSTER || {}).filter((id) => id !== "ceo" && id !== "main");
+  }
+  function mentionTokenFor(id) {
+    const nm = nameOf(id);
+    return nm && !/\s/.test(nm) ? nm : id;
+  }
+  function mentionRuntimeTag(id) {
+    const info = effectiveRuntimeForAgent(id);
+    const rt = normRuntime(info.runtime) || "claude";
+    if (rt !== "claude") return `${rt}(inherit)`;
+    const a = ROSTER[id] || {};
+    const provider = String(a.provider || "").trim();
+    const model = String(a.model || "").trim();
+    const detail = provider && provider !== "claude" ? provider : (model || "inherit");
+    return `claude(${detail})`;
+  }
+  function mentionDefaultToken() {
+    const ids = staffIds();
+    if (ids.length !== 1) return "";
+    const id = ids[0];
+    return id ? mentionTokenFor(id) : "";
   }
   // CSS sprite crops from the 256x512 sheet (cell 64): face (14,14,36,36)
   // keeps the face centered with chin + shoulders; standing body (16,6,32,54).
@@ -1487,7 +1590,7 @@
       const f = document.createElement("div");
       f.className = "face";
       face(f, who, 20);
-      w.append(f, document.createTextNode(who.toUpperCase()));
+      w.append(f, document.createTextNode(nameOf(String(who).split("#")[0])));
       d.appendChild(w);
     }
     d.appendChild(document.createTextNode(text));
@@ -2262,9 +2365,12 @@
   }
   // One mirror for everything worth glancing at while streaming/debugging.
   function feedRoute(ev) {
-    if (ev.replay || ev.theater) return;
-    const sess = ev.session || "";
-    if (ev.type === "chat.message") addFeed(ev.sub || ev.agent, ev.text, sess, ev.sub ? "ghostly" : "");
+    if (!ACTIVITY_FILTER.showFeed(ev)) return;
+    const sess = "";
+    if (ev.type === "task.started") {
+      const title = taskTitleVisible(ev.title) || tr("กำลังทำงาน…");
+      addFeed(ev.agent, "▶ " + title, sess);
+    }
     else if (ev.type === "task.progress") addFeed(ev.agent, "⚙ " + (ev.tool || "…"), sess);
     else if (ev.type === "subagent.progress") addFeed(ev.sub, "⚙ " + (ev.tool || "…"), sess, "ghostly");
     else if (ev.type === "subagent.spawned") addFeed(ev.sub, tr("👻 แตกร่างรับงาน:") + " " + String(ev.text || "").slice(0, 80), sess, "ghostly");
@@ -2278,7 +2384,10 @@
         addFeed(ev.agent, "🛡 " + ev.tool + " — " + tr("ปฏิเสธ") + " ✗", sess);
     }
     else if (ev.type === "task.completed") addFeed(ev.agent, tr("✓ งานเสร็จ"), sess);
-    else if (ev.type === "task.failed") addFeed(ev.agent, tr("✗ งานล้มเหลว"), sess);
+    else if (ev.type === "task.failed") {
+      const reason = friendlyFailureReason(ev.reason, ev.runtime);
+      addFeed(ev.agent, reason ? "✗ " + reason : tr("✗ งานล้มเหลว"), sess);
+    }
     else if (ev.type === "task.delegated") addFeed("main", tr("📋 มอบหมายงานให้") + " " + nameOf(ev.target), sess);
     else if (ev.type === "ceo.summon") addFeed("main", tr("👑 เข้ารับคำสั่งจาก CEO"), sess);
     else if (ev.type === "ceo.report") addFeed("main", tr("📨 ส่งสรุปงานให้ CEO"), sess);
@@ -2736,8 +2845,16 @@
             <input type="password" placeholder="หรือวาง API key…" autocomplete="new-password" style="flex:0 0 120px;margin:0">
             <div class="winbtn" data-a="savekey" title="ใช้ API key">💾</div>`;
         }
+        const cdetail = cauth.version
+          ? ` · ${cauth.version}${cauth.useWsl ? " · WSL" + (cauth.distro ? " " + cauth.distro : "") : ""}`
+          : (cauth.useWsl ? " · WSL" + (cauth.distro ? " " + cauth.distro : "") : "");
         cc.innerHTML = `<div class="meta"><b>${cauth.connected ? "✅" : "⚪"} Claude · Anthropic</b>
-            <span class="pstat" style="color:${cauth.connected ? "#4ade80" : "var(--dim)"}">${statusText}</span></div>` + controls;
+            <span class="pstat" style="color:${cauth.connected ? "#4ade80" : "var(--dim)"}">${statusText}${esc(cdetail)}</span></div>` + controls + `
+          <div class="assistrow" style="flex:1 1 100%;margin-top:6px">
+            <label class="chk" style="margin:0;cursor:pointer"><input id="claudeUseWsl" type="checkbox" ${regAll.claudeUseWsl ? "checked" : ""}> WSL bridge</label>
+            <input id="claudeDistro" placeholder="WSL distro (optional)" value="${esc(regAll.claudeWslDistro || "")}" style="flex:1 1 130px;margin:0">
+            <button class="sparkle" id="claudeCfgSave" style="flex:0 0 auto">💾</button>
+          </div>`;
         const saveKey = (v) => { if (v) api("/registry/key", { name: "ANTHROPIC_API_KEY", value: v }).then(() => renderConnectTab()); };
         const revealKeyInput = () => {
           const meta = cc.querySelector(".meta"); cc.innerHTML = ""; cc.appendChild(meta);
@@ -2758,37 +2875,46 @@
           else if (act === "rmkey") btn.onclick = () =>
             api("/registry/key", { name: "ANTHROPIC_API_KEY", remove: true }).then(() => renderConnectTab());
         });
-        provbox.appendChild(cc);
-      }
-
-      subhead("Runtime CLIs");
-      const codex = await fetch("/codex/status").then((x) => x.json()).catch((e) => ({ connected: false, error: String(e) }));
-      {
-        const cc = document.createElement("div");
-        cc.className = "arow"; cc.style.cursor = "default";
-        const ok = !!codex.connected;
-        const detail = ok
-          ? `${codex.version || "codex"}${codex.useWsl ? " · WSL" + (codex.distro ? " " + codex.distro : "") : ""}`
-          : (codex.error || "codex command not found");
-        cc.innerHTML = `<div class="meta"><b>${ok ? "✅" : "⚪"} Codex runtime</b>
-            <span class="pstat" style="color:${ok ? "#4ade80" : "var(--dim)"}">${esc(detail)}</span>
-            <span style="font-size:10.5px;color:var(--dim)">ใช้ config/login ของ Codex เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES</span></div>
-          <div class="assistrow" style="flex:1 1 100%;margin-top:6px">
-            <label class="chk" style="margin:0;cursor:pointer"><input id="codexUseWsl" type="checkbox" ${regAll.codexUseWsl ? "checked" : ""}> WSL bridge</label>
-            <input id="codexDistro" placeholder="WSL distro (optional)" value="${esc(regAll.codexWslDistro || "")}" style="flex:1 1 130px;margin:0">
-            <button class="sparkle" id="codexCfgSave" style="flex:0 0 auto">💾</button>
-          </div>
-          <div class="winbtn" data-a="retest" title="ทดสอบใหม่">🧪</div>`;
-        cc.querySelector('[data-a="retest"]').onclick = () => renderConnectTab();
-        cc.querySelector("#codexCfgSave").onclick = async () => {
-          await api("/codex/config", {
-            useWsl: cc.querySelector("#codexUseWsl").checked,
-            distro: cc.querySelector("#codexDistro").value.trim(),
+        cc.querySelector("#claudeCfgSave").onclick = async () => {
+          await api("/claude/config", {
+            useWsl: cc.querySelector("#claudeUseWsl").checked,
+            distro: cc.querySelector("#claudeDistro").value.trim(),
           });
           renderConnectTab();
         };
         provbox.appendChild(cc);
       }
+
+      subhead("Runtime CLIs");
+      const runtimeCliCard = async (id, label) => {
+        const info = await fetch(`/${id}/status`).then((x) => x.json()).catch((e) => ({ connected: false, error: String(e) }));
+        const cc = document.createElement("div");
+        cc.className = "arow"; cc.style.cursor = "default";
+        const ok = !!info.connected;
+        const detail = ok
+          ? `${info.version || id}${info.useWsl ? " · WSL" + (info.distro ? " " + info.distro : "") : ""}`
+          : (info.error || `${id} command not found`);
+        cc.innerHTML = `<div class="meta"><b>${ok ? "✅" : "⚪"} ${label} runtime</b>
+            <span class="pstat" style="color:${ok ? "#4ade80" : "var(--dim)"}">${esc(detail)}</span>
+            <span style="font-size:10.5px;color:var(--dim)">ใช้ config/login ของ ${label} เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES</span></div>
+          <div class="assistrow" style="flex:1 1 100%;margin-top:6px">
+            <label class="chk" style="margin:0;cursor:pointer"><input class="cliUseWsl" type="checkbox" ${regAll[id + "UseWsl"] ? "checked" : ""}> WSL bridge</label>
+            <input class="cliDistro" placeholder="WSL distro (optional)" value="${esc(regAll[id + "WslDistro"] || "")}" style="flex:1 1 130px;margin:0">
+            <button class="sparkle cliCfgSave" style="flex:0 0 auto">💾</button>
+          </div>
+          <div class="winbtn" data-a="retest" title="ทดสอบใหม่">🧪</div>`;
+        cc.querySelector('[data-a="retest"]').onclick = () => renderConnectTab();
+        cc.querySelector(".cliCfgSave").onclick = async () => {
+          await api(`/${id}/config`, {
+            useWsl: cc.querySelector(".cliUseWsl").checked,
+            distro: cc.querySelector(".cliDistro").value.trim(),
+          });
+          renderConnectTab();
+        };
+        provbox.appendChild(cc);
+      };
+      await runtimeCliCard("codex", "Codex");
+      await runtimeCliCard("hermes", "Hermes");
 
       // ── Anthropic-compatible (claude talks straight to them)
       subhead("ต่อตรง (Anthropic-compatible)");
@@ -3034,7 +3160,7 @@
           const _prov = a.provider || "claude";
           const _brain = a.model ? a.model : (_prov === "claude" ? "Claude" : _prov);
           const _brainTitle = `${_prov}${a.model ? " / " + a.model : ""}`;
-          _brainHtml = (_rtInfo.runtime === "codex" ? "" : `<span class="brain" title="${_brainTitle}">🧠 ${_brain}</span>`) +
+          _brainHtml = (_rtInfo.runtime === "claude" ? `<span class="brain" title="${_brainTitle}">🧠 ${_brain}</span>` : "") +
             runtimeBadgeHtml(_rtInfo);
         }
         row.insertAdjacentHTML("beforeend",
@@ -3381,7 +3507,7 @@
          <select id="eRuntime" style="display:none"></select>
          <div class="checks" id="eRuntimeChoices"></div>
          <div id="eRuntimeHint" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
-         <div style="font-size:10.5px;color:var(--dim);margin:6px 0 4px">Brain/provider settings below apply to Claude runtime only; Codex uses its own CLI config.</div>
+         <div style="font-size:10.5px;color:var(--dim);margin:6px 0 4px">Brain/provider settings below apply to Claude runtime only; Codex and Hermes use their own CLI config.</div>
          <div id="brainModelBlock">
            <select id="eProvider"></select>
            <div id="eModelWrap" style="position:relative;margin-top:6px">
@@ -3580,7 +3706,7 @@
           ? `Override: ${runtimeName(rt)}`
           : `Inherited from ${normRuntime(roleProfile(roleSel.value).runtime) ? "role" : "default"}: ${runtimeName(rt)}`;
         if (brainField) brainField.style.display = "";
-        if (brainModelBlock) brainModelBlock.style.display = rt === "codex" ? "none" : "";
+        if (brainModelBlock) brainModelBlock.style.display = rt === "claude" ? "" : "none";
       };
       if (runtimeSel) {
         renderRuntimeOptions();
@@ -3672,7 +3798,7 @@
       modelInput.oninput = showMenu;
       modelInput.onblur = () => setTimeout(() => modelMenu.classList.remove("open"), 150);
       const renderModels = (provChanged) => {
-        if (effectiveRuntimeInEditor() === "codex") {
+        if (effectiveRuntimeInEditor() !== "claude") {
           if (saveBtn) { saveBtn.disabled = false; saveBtn.title = ""; }
           warn.style.display = "none";
           modelWrap.style.display = "none";
@@ -3697,7 +3823,7 @@
         // sensible default (first usable model) so the field is never left invalid.
         // Default to the provider's BEST / NEWEST model (a quiet nudge toward the latest);
         // fall back to the first usable one. Never the blank/implicit model.
-        const def = BEST_MODEL[p] || curModels.find(Boolean) || "";
+        const def = p === "claude" ? "" : (BEST_MODEL[p] || curModels.find(Boolean) || "");
         modelInput.value = (!provChanged && a.model && p === (a.provider || "claude")) ? a.model : def;
       };
       refreshBrainForRuntime = () => renderModels(false);
@@ -3719,6 +3845,7 @@
             name: modalCard.querySelector("#eName").value || "Agent",
             role: roleSel.value,
             brief: modalCard.querySelector("#eBrief").value,
+            lang: LANG,
           });
           // The copilot fills EVERY persona field it designed.
           if (r.prompt) modalCard.querySelector("#ePrompt").value = r.prompt;
@@ -3748,10 +3875,10 @@
             tier: Number(modalCard.querySelector("#eTier").value) || 3,
             voice: (modalCard.querySelector("#eVoice") || {}).value || "",
             runtime: (modalCard.querySelector("#eRuntime") || {}).value || "",
-            provider: runtimeForSave() === "codex"
+            provider: runtimeForSave() !== "claude"
               ? (a.provider || "claude")
               : ((modalCard.querySelector("#eProvider") || {}).value || "claude"),
-            model: runtimeForSave() === "codex"
+            model: runtimeForSave() !== "claude"
               ? (a.model || "")
               : ((modalCard.querySelector("#eModel") || {}).value || ""),
             persona: {
@@ -4912,6 +5039,7 @@
       const r = await fetch(`/sessions/log?agent=${encodeURIComponent(bucket)}&key=${encodeURIComponent(key)}`)
         .then((x) => x.json());
       for (const m of r.log || []) {
+        if (!ACTIVITY_FILTER.showThread(m)) continue;
         if (m.who === "tool") addToolRow(m.text);
         else if (m.who === "you") addMsg("you", null, m.text, m.ts);
         else addMsg("agent", faceId || m.who, m.text, m.ts);
@@ -4933,6 +5061,7 @@
       const r = await fetch(`/sessions/log?agent=${encodeURIComponent(sessAgent())}&key=${encodeURIComponent(key)}`)
         .then((x) => x.json());
       for (const m of r.log || []) {
+        if (!ACTIVITY_FILTER.showThread(m)) continue;
         if (m.who === "tool") addToolRow(m.text);
         else addMsg(m.who === "you" ? "you" : "agent", m.who === "you" ? null : sessAgent(), m.text, m.ts,
           m.who !== "you" && m.model ? "🧠 " + m.model : "");
@@ -5412,8 +5541,8 @@
       REGROLES = ev.roles || [];
       REGROLEPROFILES = ev.roleProfiles || {};
       DEFAULT_RUNTIME = normRuntime(ev.defaultRuntime) || "claude";
-      RUNTIMES = (ev.runtimes || ["claude", "codex"]).map(normRuntime).filter(Boolean);
-      if (!RUNTIMES.length) RUNTIMES = ["claude", "codex"];
+      RUNTIMES = (ev.runtimes || ["claude", "codex", "hermes"]).map(normRuntime).filter(Boolean);
+      if (!RUNTIMES.length) RUNTIMES = ["claude", "codex", "hermes"];
       REGSKILLS = ev.skills || {};
       REGTOOLS = ev.tools || [];
       BUILTIN_DESC = ev.builtinTools || {};
@@ -5549,6 +5678,7 @@
     if (ev.agents) ev.agents.forEach((a) => { if (isRosterAgent(a)) ensureAgent(a, "meeting"); });
 
     if (ev.type === "chat.message") {
+      if (!ACTIVITY_FILTER.showThread(ev)) return;
       // The pane is per-conversation: bubble only for the current agent's
       // current thread (or the meeting being watched live); history replays
       // come from /sessions/log instead.
@@ -5580,12 +5710,17 @@
       if (mapOpen) renderMapIcons();
     }
     else if (ev.type === "task.started") {
+      if (!ev.replay) {
+        const title = taskTitleVisible(ev.title);
+        if (title) addLog(`▶ <b>${nameOf(ev.agent)}</b> ${String(title).replace(/</g, "&lt;")}`);
+      }
       missions[key] = { agent: ev.agent, state: "running" }; renderMissions();
       ensureAgent(ev.agent, "working");
       if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) showTyping();
     }
     else if (ev.type === "task.completed") {
+      if (!ev.replay) addLog(`<b>${nameOf(ev.agent)}</b> ${tr("✓ งานเสร็จ")}`);
       if (missions[key]) { missions[key].state = "done"; renderMissions(); }
       ensureAgent(ev.agent, "idle");
       if (mapOpen) renderMapIcons();
@@ -5598,6 +5733,10 @@
       if (!ev.replay) refreshBrainsSoon();  // keep the 🧠 BRAINS usage meters current
     }
     else if (ev.type === "task.failed") {
+      if (!ev.replay) {
+        const reason = friendlyFailureReason(ev.reason, ev.runtime);
+        addLog(`✗ <b>${nameOf(ev.agent)}</b> ${reason ? String(reason).replace(/</g, "&lt;") : tr("✗ งานล้มเหลว").replace(/^✗\s*/, "")}`);
+      }
       if (missions[key]) { missions[key].state = "failed"; renderMissions(); }
       ensureAgent(ev.agent, "idle");
       if (mapOpen) renderMapIcons();
@@ -5861,6 +6000,8 @@
   document.getElementById("send").onclick = send;
   (function () {
     const box = document.getElementById("inp");
+    const menu = document.getElementById("mentionMenu");
+    let mentionIndex = 0;
     // grow with the message; only show a scrollbar once it hits the cap (so an
     // empty box never has a phantom scrollbar from the placeholder).
     const grow = () => {
@@ -5868,12 +6009,119 @@
       box.style.height = Math.min(box.scrollHeight, 128) + "px";
       box.style.overflowY = box.scrollHeight > 128 ? "auto" : "hidden";
     };
-    box.addEventListener("input", grow);
+    const mentionRange = () => {
+      const pos = box.selectionStart;
+      if (pos == null || pos !== box.selectionEnd) return null;
+      const before = box.value.slice(0, pos);
+      const at = before.lastIndexOf("@");
+      if (at < 0) return null;
+      if (at > 0 && !/\s/.test(before[at - 1])) return null;
+      const raw = before.slice(at + 1);
+      if (/\s|:|：|@/.test(raw)) return null;
+      return { start: at, end: pos, query: raw.toLowerCase() };
+    };
+    const mentionChoices = (query) => staffIds()
+      .map((id) => ({ id, name: nameOf(id), role: roleOf(id), runtimeTag: mentionRuntimeTag(id) }))
+      .filter((a) => {
+        const q = String(query || "").toLowerCase();
+        return !q || a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q);
+      })
+      .slice(0, 8);
+    const placeMentionMenu = () => {
+      const r = box.getBoundingClientRect();
+      const top = Math.max(8, r.top - menu.offsetHeight - 8);
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = top + "px";
+    };
+    const closeMentionMenu = () => {
+      menu.classList.remove("open");
+      menu.innerHTML = "";
+    };
+    const pickMention = (choice) => {
+      const range = mentionRange();
+      if (!range || !choice) return closeMentionMenu();
+      const token = mentionTokenFor(choice.id);
+      box.value = box.value.slice(0, range.start) + "@" + token + " " + box.value.slice(range.end);
+      const pos = range.start + token.length + 2;
+      box.selectionStart = box.selectionEnd = pos;
+      closeMentionMenu();
+      grow();
+      box.focus();
+    };
+    const renderMentionMenu = () => {
+      const range = mentionRange();
+      if (!range) return closeMentionMenu();
+      const choices = mentionChoices(range.query);
+      if (!choices.length) return closeMentionMenu();
+      mentionIndex = Math.max(0, Math.min(mentionIndex, choices.length - 1));
+      menu.innerHTML = choices.map((a, i) =>
+        `<div class="opt${i === mentionIndex ? " active" : ""}" data-id="${esc(a.id)}">
+          <span class="face"></span><span><b>${esc(a.name)}</b><small>@${esc(a.id)} · ${esc(a.role)}</small></span>
+          <span class="mrun">${esc(a.runtimeTag)}</span>
+        </div>`).join("");
+      menu.querySelectorAll(".opt").forEach((o) => {
+        const id = o.dataset.id;
+        const f = o.querySelector(".face");
+        face(f, id, 28);
+        o.onmouseenter = () => {
+          mentionIndex = choices.findIndex((a) => a.id === id);
+          menu.querySelectorAll(".opt").forEach((x, ix) => x.classList.toggle("active", ix === mentionIndex));
+        };
+        o.onmousedown = (e) => { e.preventDefault(); pickMention(choices.find((a) => a.id === id)); };
+      });
+      menu.classList.add("open");
+      placeMentionMenu();
+    };
+    let mentionFilling = false;
+    box.addEventListener("input", (e) => {
+      if (!mentionFilling && box.value === "@" && e.inputType === "insertText" && e.data === "@") {
+        const token = mentionDefaultToken();
+        if (token) {
+          mentionFilling = true;
+          box.value = "@" + token + " ";
+          box.selectionStart = box.selectionEnd = box.value.length;
+          mentionFilling = false;
+        }
+      }
+      grow();
+      mentionIndex = 0;
+      renderMentionMenu();
+    });
     grow();  // lock the correct one-row height up front
     box.addEventListener("keydown", (e) => {
+      if (menu.classList.contains("open")) {
+        const choices = mentionChoices((mentionRange() || {}).query);
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          mentionIndex = (mentionIndex + 1) % Math.max(1, choices.length);
+          renderMentionMenu();
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          mentionIndex = (mentionIndex - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length);
+          renderMentionMenu();
+          return;
+        }
+        if (e.key === "Tab" || e.key === "Enter") {
+          if (choices[mentionIndex]) {
+            e.preventDefault();
+            pickMention(choices[mentionIndex]);
+            return;
+          }
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeMentionMenu();
+          return;
+        }
+      }
       // Enter sends; Shift+Enter inserts a newline (like every modern chat).
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
     });
+    box.addEventListener("click", renderMentionMenu);
+    box.addEventListener("blur", () => setTimeout(closeMentionMenu, 120));
+    window.addEventListener("resize", () => { if (menu.classList.contains("open")) placeMentionMenu(); });
   })();
   // Top-bar popups (menus, modals, the map…) live where the sidebar slides
   // in — opening any of them tucks the panel away first.
@@ -5892,16 +6140,8 @@
         shellPost("drag-overlay");
     });
     const fullBtn = document.getElementById("fullBtn");
-    const miniBtn = document.getElementById("miniBtn");
     fullBtn.onclick = () => shellPost("fullscreen");
-    miniBtn.onclick = () => shellPost("mini");
     document.getElementById("hideBtn").onclick = () => shellPost("hide");
-    // The ◱/⛶ glyphs DON'T render on Windows 10 (no font coverage) — the restore
-    // button showed up EMPTY there, so people couldn't find their way back from mini.
-    // Use inline SVG icons (identical everywhere). State via the same media query the
-    // mini-mode CSS uses: ICON_MINI when full (action: shrink), ICON_RESTORE when mini.
-    const ICON_MINI = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1.6"/><rect x="2.5" y="9" width="6" height="4.5" rx="1" fill="currentColor" stroke="none"/></svg>';
-    const ICON_RESTORE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.3H3.3V6M10 3.3h2.7V6M6 12.7H3.3V10M10 12.7h2.7V10"/></svg>';
     const ICON_FULL = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.7H2.7V6M10 2.7h3.3V6M6 13.3H2.7V10M10 13.3h3.3V10"/></svg>';
     const ICON_UNFULL = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 6h3.1V2.9M13.2 6h-3.1V2.9M2.8 10h3.1v3.1M13.2 10h-3.1v3.1"/></svg>';
     window.setFullscreenMode = (on) => {
@@ -5909,20 +6149,10 @@
       fullBtn.innerHTML = on ? ICON_UNFULL : ICON_FULL;
       fullBtn.title = on ? "Restore chat window" : "Fullscreen chat";
     };
-    window.setFullscreenMode(false);
-    const syncMiniBtn = () => {
-      const small = _miniMQ.matches;   // mini window is ≤480px wide / ≤460px tall
-      miniBtn.innerHTML = small ? ICON_RESTORE : ICON_MINI;
-      miniBtn.title = small ? "Restore window size" : "Mini window";
-    };
-    syncMiniBtn();
-    requestAnimationFrame(syncMiniBtn);          // re-read once layout settles
-    window.addEventListener("resize", syncMiniBtn);
-    _miniMQ.addEventListener("change", syncMiniBtn);   // fires exactly on mini⇄full
+    window.setFullscreenMode(true);
   } else {
     // plain browser: the OS window has its own chrome
     document.getElementById("fullBtn").style.display = "none";
-    document.getElementById("miniBtn").style.display = "none";
     document.getElementById("hideBtn").style.display = "none";
     document.body.style.borderRadius = "0";
     document.body.style.border = "none";

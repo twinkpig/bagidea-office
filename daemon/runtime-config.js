@@ -1,6 +1,6 @@
 "use strict";
 
-const VALID_RUNTIMES = new Set(["claude", "codex"]);
+const VALID_RUNTIMES = new Set(["claude", "codex", "hermes"]);
 
 function normalizeRuntime(value) {
   const v = String(value || "").trim().toLowerCase();
@@ -35,7 +35,10 @@ function effectiveAgentRuntime(reg, agentId) {
 }
 
 function runtimeLabel(runtime) {
-  return normalizeRuntime(runtime) === "codex" ? "Codex" : "Claude Code";
+  const rt = normalizeRuntime(runtime);
+  if (rt === "codex") return "Codex";
+  if (rt === "hermes") return "Hermes";
+  return "Claude Code";
 }
 
 module.exports = {

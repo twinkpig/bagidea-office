@@ -50,6 +50,7 @@ var _chat_meta: Label
 var _chat_tasks: Label
 var _chat_recent: Label
 var _chat_input: LineEdit
+var _chat_autofilling := false
 var _selected_chat_agent := ""
 var _last_chat_agent := ""
 var _click_down_pos := Vector2.INF
@@ -171,7 +172,15 @@ func _setup_click_chat_ui() -> void:
 	_chat_input.placeholder_text = "Type a task or message"
 	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chat_input.text_submitted.connect(func(_text: String): _submit_chat_prompt())
+	_chat_input.text_changed.connect(_on_chat_input_changed)
 	input_row.add_child(_chat_input)
+
+	var mention := Button.new()
+	mention.text = "@"
+	mention.tooltip_text = "Insert @agent shortcut"
+	mention.focus_mode = Control.FOCUS_NONE
+	mention.pressed.connect(_insert_selected_agent_mention)
+	input_row.add_child(mention)
 
 	var send := Button.new()
 	send.text = "Send"
@@ -341,10 +350,49 @@ func _agent_recent_text(id: String) -> String:
 	if lines.is_empty():
 		return "No recent events"
 	var out: Array[String] = []
-	var start := maxi(0, lines.size() - 3)
+	var start := maxi(0, lines.size() - 8)
 	for i in range(start, lines.size()):
 		out.append("- " + str(lines[i]))
 	return "\n".join(out)
+
+func _insert_selected_agent_mention() -> void:
+	if _selected_chat_agent == "":
+		return
+	var id := _mention_default_agent_id()
+	if id == "":
+		return
+	_chat_input.text = "@" + id + " " + _chat_input.text.strip_edges()
+	_chat_input.caret_column = _chat_input.text.length()
+	_chat_input.grab_focus()
+
+func _on_chat_input_changed(text: String) -> void:
+	if _chat_autofilling:
+		return
+	if text != "@":
+		return
+	var id := _mention_default_agent_id()
+	if id == "":
+		return
+	_chat_autofilling = true
+	_chat_input.text = "@" + id + " "
+	_chat_input.caret_column = _chat_input.text.length()
+	_chat_autofilling = false
+
+func _mention_default_agent_id() -> String:
+	if _selected_chat_agent != "" and _selected_chat_agent != "ceo" and _selected_chat_agent != "main":
+		return _selected_chat_agent
+	return _first_staff_agent_id()
+
+func _first_staff_agent_id() -> String:
+	for id in roster.keys():
+		var s := str(id)
+		if s != "ceo" and s != "main":
+			return s
+	for id in agents.keys():
+		var s := str(id)
+		if s != "ceo" and s != "main":
+			return s
+	return ""
 
 func _note_agent_event(id: String, text: String) -> void:
 	if id == "":
@@ -365,15 +413,16 @@ func _submit_chat_prompt() -> void:
 		return
 	var agent := _selected_chat_agent
 	_last_chat_agent = agent
-	_hide_chat_prompt()
+	_chat_input.text = ""
 	var node := _node_for_agent(agent)
 	if is_instance_valid(node):
 		node.set_status("sending...")
 	_agent_last_status[agent] = "sending..."
 	_note_agent_event(agent, "Message sent from office panel")
+	var route_agent := "main" if prompt.begins_with("@") else agent
 	var err := _chat_req.request("http://127.0.0.1:8787/chat",
 		["content-type: application/json"], HTTPClient.METHOD_POST,
-		JSON.stringify({"agent": agent, "prompt": prompt}))
+		JSON.stringify({"agent": route_agent, "prompt": prompt}))
 	if err != OK and is_instance_valid(node):
 		node.set_status("chat failed: " + str(err))
 		_agent_last_status[agent] = "chat failed: " + str(err)

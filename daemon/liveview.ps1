@@ -10,8 +10,8 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host ""
 Write-Host "  ================ BAGIDEA OFFICE — LIVE VIEW ================" -ForegroundColor Cyan
-Write-Host "  agent กำลังทำงานในโปรเจคนี้ — นี่คืองานสดจาก session ของเขา" -ForegroundColor DarkCyan
-Write-Host "  เมื่อ agent ทำเสร็จ หน้าต่างนี้จะเข้า session เดิมให้คุณคุมต่อทันที" -ForegroundColor DarkCyan
+Write-Host "  An agent is working in this project — this is the live output from that session." -ForegroundColor DarkCyan
+Write-Host "  When the agent finishes, this window will attach to the same session so you can take over." -ForegroundColor DarkCyan
 Write-Host "  =============================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -63,7 +63,7 @@ while ($true) {
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Yellow
-Write-Host "  agent ทำงานจบแล้ว — ส่งมือให้คุณใน session เดิม" -ForegroundColor Yellow
+Write-Host "  Agent finished — handing the same session back to you." -ForegroundColor Yellow
 Write-Host "  ============================================================" -ForegroundColor Yellow
 Write-Host ""
 

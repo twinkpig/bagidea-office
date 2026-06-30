@@ -33,6 +33,11 @@ const providers = require("./providers");
 const proxy = require("./proxy");
 const runtimeConfig = require("./runtime-config");
 const codexRuntime = require("./runtimes/codex");
+const hermesRuntime = require("./runtimes/hermes");
+const wslLiteRuntime = require("./runtimes/wsl-lite");
+const claudeRuntime = require("./runtimes/claude");
+const personaDraft = require("./persona-draft");
+const { parseAgentMentionShortcut } = require("./agent-mention");
 const { RunWatchdog } = require("./watchdog");
 const { wireWorkspaceSettings } = require("./wire-hooks-runtime");
 const { killTree } = require("./kill-tree");   // cross-platform child reap (issue #15 review)
@@ -50,6 +55,8 @@ const WORKSPACE = path.join(__dirname, "..", "workspace");
 // two are used right here — broadcast() journals to JOURNAL, GET / serves OVERLAY).
 const OVERLAY = path.join(__dirname, "overlay.html");
 const JOURNAL = path.join(__dirname, "journal.jsonl");
+const ACTIVITY_FILTER = path.join(__dirname, "activity-filter.js");
+const HERMES_PROMPT_DIR = path.join(WORKSPACE, ".bagidea-hermes");
 
 const wsClients = new Set();
 const pendingPerms = new Map(); // id -> {res, timer, agent, tool}
@@ -90,6 +97,10 @@ function loadReg() {
     "Designer", "Analyst", "Operator", "Specialist"];
   reg.roleProfiles = reg.roleProfiles && typeof reg.roleProfiles === "object" ? reg.roleProfiles : {};
   reg.defaultRuntime = runtimeConfig.normalizeRuntime(reg.defaultRuntime) || "claude";
+  reg.claudeUseWsl = claudeRuntime.defaultUseWsl({
+    configured: Object.prototype.hasOwnProperty.call(reg, "claudeUseWsl") ? reg.claudeUseWsl : undefined,
+  });
+  reg.claudeWslDistro = String(reg.claudeWslDistro || "").trim().slice(0, 80);
   for (const r of reg.roles) if (!reg.roleProfiles[r]) reg.roleProfiles[r] = {};
   reg.skills = reg.skills || {};
   // Seed / refresh the builtin starter library. We own entries flagged
@@ -133,7 +144,7 @@ function loadReg() {
   }
   // Default office rhythms for a fresh install (owner can change in settings).
   if (reg.heartbeatMin === undefined) reg.heartbeatMin = 60; // Director check-in
-  if (reg.socialMin === undefined) reg.socialMin = 120;      // agents socialize (economical default)
+  if (reg.socialMin === undefined) reg.socialMin = 0;        // agents socialize (off by default)
   if (reg.proposalMin === undefined) reg.proposalMin = 120;  // min gap between CEO pitches
   // Local/customized installs should not self-prompt into an upstream update,
   // because the updater can overwrite local code changes. Owners can opt in.
@@ -243,7 +254,10 @@ function monitorCount() {
 function rosterEvt() {
   return { type: "roster.sync", agents: reg.agents, roles: reg.roles,
     roleProfiles: reg.roleProfiles || {}, defaultRuntime: reg.defaultRuntime || "claude",
-    runtimes: ["claude", "codex"],
+    runtimes: ["claude", "codex", "hermes"],
+    claudeUseWsl: !!reg.claudeUseWsl, claudeWslDistro: reg.claudeWslDistro || "",
+    codexUseWsl: !!reg.codexUseWsl, codexWslDistro: reg.codexWslDistro || "",
+    hermesUseWsl: !!reg.hermesUseWsl, hermesWslDistro: reg.hermesWslDistro || "",
     tools: reg.tools, builtinTools: BUILTIN_TOOLS, mcp: reg.mcpServers,
     skills: reg.skills, autoSkills: reg.autoSkills !== false,
     verifyDelegated: reg.verifyDelegated === true,
@@ -405,6 +419,8 @@ try {
   if (r.rotated) console.log(`[maint] journal trimmed ${r.before} -> ${r.kept} lines`);
 } catch (e) { console.error("[maint] journal:", e.message); }
 try {
+  const n = maintenance.normalizeSessions(sess);
+  if (n.changed) { sess = n.sess; saveSess(); console.log(`[maint] normalized ${n.rewritten} legacy session text item(s)`); }
   const p = maintenance.pruneSessions(sess);
   if (p.changed) { sess = p.sess; saveSess(); console.log(`[maint] pruned ${p.dropped} stale session thread(s)`); }
 } catch (e) { console.error("[maint] sessions:", e.message); }
@@ -464,15 +480,120 @@ function provBudget(agent) {
   if (w > 0) return Math.round(w * 0.8);
   return (p in CTX_BUDGET ? CTX_BUDGET[p] : 100000);
 }
+function claudeUseWsl() {
+  return process.platform === "win32" && !!reg.claudeUseWsl;
+}
+function claudeWslDistro() {
+  return String(reg.claudeWslDistro || "").trim();
+}
+function powerShellEncodedCommand(command) {
+  return "-EncodedCommand " + Buffer.from(String(command), "utf16le").toString("base64");
+}
+function powerShellLiteral(value) {
+  return "'" + String(value).replace(/'/g, "''") + "'";
+}
+function powerShellNativeCommand(command, args = []) {
+  return powerShellEncodedCommand("& " + [command, ...args].map(powerShellLiteral).join(" "));
+}
+function powerShellNativeCommandText(command, args = []) {
+  return "& " + [command, ...args].map(powerShellLiteral).join(" ");
+}
+function powerShellCommandText(psCmd) {
+  const s = String(psCmd || "");
+  const enc = s.match(/^-EncodedCommand\s+(\S+)$/);
+  if (enc) {
+    try { return Buffer.from(enc[1], "base64").toString("utf16le"); } catch {}
+  }
+  return s.match(/^-Command "([\s\S]*)"$/)?.[1] || "";
+}
+function wslCliLaunchPsCommand(cwd, cli, cliArgs = [], distro = "") {
+  const dir = path.join(__dirname, ".wsl-launch");
+  fs.mkdirSync(dir, { recursive: true });
+  const safeCli = String(cli || "sh").replace(/[^\w.-]/g, "_");
+  const file = path.join(dir, safeCli + "-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".sh");
+  const wslCwd = claudeRuntime.mapWindowsPathToWsl(cwd || WORKSPACE);
+  const useLite = String(cli || "") === "codex" || String(cli || "") === "hermes";
+  const body = useLite ? [
+    "#!/bin/sh",
+    "export PATH=" + wslLiteRuntime.shellQuote(wslLiteRuntime.defaultPathExpr()),
+    "cd " + wslLiteRuntime.shellQuote(wslCwd) + " || exit 1",
+    wslLiteRuntime.commandLineWithFallback([cli, ...cliArgs]),
+    "",
+  ].join("\n") : (() => {
+    const inner = [
+      "if [ -f ~/.zshrc ]; then . ~/.zshrc >/dev/null 2>&1 || true; fi",
+      "if [ -f ~/.profile ]; then . ~/.profile >/dev/null 2>&1 || true; fi",
+      "cd " + claudeRuntime.shellQuote(wslCwd) + " || exit 1",
+      "exec " + [cli, ...cliArgs].map(claudeRuntime.shellQuote).join(" "),
+    ].join("; ");
+    return [
+      "#!/bin/sh",
+      "shell=\"${SHELL:-}\"",
+      "if [ -z \"$shell\" ] || [ ! -x \"$shell\" ]; then shell=$(getent passwd \"$(id -un)\" | cut -d: -f7 2>/dev/null || true); fi",
+      "if [ -z \"$shell\" ] || [ ! -x \"$shell\" ]; then shell=/bin/sh; fi",
+      "exec \"$shell\" -lc " + claudeRuntime.shellQuote(inner),
+      "",
+    ].join("\n");
+  })();
+  fs.writeFileSync(file, body);
+  const args = [];
+  if (distro) args.push("-d", distro);
+  args.push("--exec", "/bin/sh", claudeRuntime.mapWindowsPathToWsl(file));
+  return powerShellNativeCommand("wsl.exe", args);
+}
+function wslClaudeLaunchPsCommand(cwd, claudeArgs = []) {
+  return wslCliLaunchPsCommand(cwd, "claude", claudeArgs, claudeWslDistro());
+}
+function wslCapture(script, timeout = 5000) {
+  const { execFileSync } = require("child_process");
+  const args = claudeRuntime.wslUserShellArgs(["/bin/sh", "-lc", script], claudeWslDistro());
+  return execFileSync("wsl.exe", args, {
+    timeout,
+    windowsHide: true,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+function claudeSessionFileSize(cwd, sid) {
+  const enc = claudeRuntime.claudeSessionProjectKey({ cwd, useWsl: claudeUseWsl() });
+  if (claudeUseWsl()) {
+    const file = "~/.claude/projects/" + claudeRuntime.shellQuote(enc) + "/" +
+      claudeRuntime.shellQuote(String(sid) + ".jsonl");
+    const out = wslCapture("stat -c %s " + file + " 2>/dev/null || true");
+    const n = Number(String(out || "").trim());
+    return n > 0 ? n : 0;
+  }
+  const f = path.join(require("os").homedir(), ".claude", "projects", enc, sid + ".jsonl");
+  return fs.statSync(f).size;
+}
+function claudeSessionFileExists(cwd, sid) {
+  try {
+    if (claudeUseWsl()) return claudeSessionFileSize(cwd, sid) > 0;
+    const enc = claudeRuntime.claudeSessionProjectKey({ cwd, useWsl: false });
+    const sidFile = path.join(require("os").homedir(), ".claude", "projects", enc, sid + ".jsonl");
+    return fs.existsSync(sidFile);
+  } catch { return false; }
+}
+function spawnClaude(args, opts = {}) {
+  const spec = claudeRuntime.claudeSpawnSpec({
+    cwd: opts.cwd || WORKSPACE,
+    args,
+    useWsl: claudeUseWsl(),
+    distro: claudeWslDistro(),
+  });
+  return spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: opts.env,
+  });
+}
 // Estimate a resumed thread's size from the REAL claude session file (full tool
 // outputs live there, not in our trimmed log). bytes/4 ≈ tokens; + office overhead.
 function overBudget(agent, entry, cwd) {
   const budget = provBudget(agent);
   if (!budget || !entry || !entry.sid) return false;  // 0 = claude self-compacts
   try {
-    const enc = String(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-    const f = path.join(require("os").homedir(), ".claude", "projects", enc, entry.sid + ".jsonl");
-    const estTokens = Math.round(fs.statSync(f).size / 4) + 25000;
+    const estTokens = Math.round(claudeSessionFileSize(cwd, entry.sid) / 4) + 25000;
     return estTokens > budget;
   } catch { return false; }
 }
@@ -607,8 +728,8 @@ function claudeText(prompt, opts = {}) {
     }
     const route = providers.resolve(opts.provider, opts.model, reg);
     if (route.modelArgs.length) args.push(...route.modelArgs);
-    const child = spawn("claude", args, {
-      cwd: WORKSPACE, shell: true,
+    const child = spawnClaude(args, {
+      cwd: WORKSPACE,
       env: { ...process.env, ...(reg.apiKeys || {}), ...route.env, OFFICE_ADAPTER: "1",
         ...(opts.env || {}) },
     });
@@ -1178,12 +1299,18 @@ function createProject(name, place, pathArg) {
 // claude keeps sessions under ~/.claude/projects/<path-as-dashes>/*.jsonl.
 function claudeSessionDir(dir) {
   return path.join(require("os").homedir(), ".claude", "projects",
-    String(dir).replace(/[^a-zA-Z0-9]/g, "-"));
+    claudeRuntime.claudeSessionProjectKey({ cwd: dir, useWsl: false }));
 }
 // Newest session id — `claude -c` ignores headless-born sessions, so the
 // open button resumes the latest sid EXPLICITLY (proven to work).
 function newestSid(dir) {
   try {
+    if (claudeUseWsl()) {
+      const enc = claudeRuntime.claudeSessionProjectKey({ cwd: dir, useWsl: true });
+      const script = "d=~/.claude/projects/" + claudeRuntime.shellQuote(enc) +
+        "; [ -d \"$d\" ] || exit 0; ls -t \"$d\"/*.jsonl 2>/dev/null | head -n 1 | xargs -r basename | sed 's/\\.jsonl$//'";
+      return String(wslCapture(script) || "").trim() || null;
+    }
     const p = claudeSessionDir(dir);
     const files = fs.readdirSync(p).filter((f) => f.endsWith(".jsonl"))
       .map((f) => ({ f, t: fs.statSync(path.join(p, f)).mtimeMs }))
@@ -1325,11 +1452,25 @@ function jobDue(job, now) {
 // owner ONLY when something deserves it; "OK" stays silent.
 let lastHeartbeat = Date.now();
 let lastHbSig = null;
+function officeLocale() {
+  if (reg.lang === "zh") return "zh-CN";
+  if (reg.lang === "ja") return "ja-JP";
+  if (reg.lang === "th") return "th-TH";
+  return "en-US";
+}
+function officeLanguageName() {
+  if (reg.lang === "zh") return "Simplified Chinese";
+  if (reg.lang === "ja") return "Japanese";
+  if (reg.lang === "th") return "Thai";
+  return "English";
+}
 function heartbeat() {
   lastHeartbeat = Date.now();
+  const locale = officeLocale();
+  const responseLanguage = officeLanguageName();
   const upcoming = cal.filter((c) => c.at > Date.now() && c.at < Date.now() + 12 * 3600000)
     .sort((a, b) => a.at - b.at).slice(0, 6)
-    .map((c) => `- ${c.title} @ ${new Date(c.at).toLocaleString("th-TH")}`).join("\n") || "(empty)";
+    .map((c) => `- ${c.title} @ ${new Date(c.at).toLocaleString(locale)}`).join("\n") || "(empty)";
   const standing = jobs.filter((j) => !j.done && j.enabled !== false).slice(0, 8)
     .map((j) => `- [${j.mode}] ${j.agent}: ${j.prompt.slice(0, 60)}`).join("\n") || "(none)";
   const board = notes.slice(-8).map((n) => `- ${n.text}`).join("\n") || "(empty)";
@@ -1339,12 +1480,12 @@ function heartbeat() {
   if (sig === lastHbSig) return;
   lastHbSig = sig;
   runClaude("main",
-    `รอบตรวจความเรียบร้อยของ Director (ตอนนี้ ${new Date().toLocaleString("th-TH")}):\n\n` +
-    `นัดหมาย 12 ชม.ข้างหน้า:\n${upcoming}\n\nงานที่สั่งค้างไว้:\n${standing}\n\n` +
-    `กระดานโน้ต:\n${board}\n\n` +
-    `ถ้ามีสิ่งที่ CEO ควรรู้ตอนนี้ (นัดใกล้ถึง งานสะดุด โน้ตที่ควรเห็น) ` +
-    `ให้เขียนข้อความแจ้งสั้นๆ อ่านง่าย. ถ้าทุกอย่างเรียบร้อยและไม่มีอะไรต้องรบกวน ` +
-    `ให้ตอบคำเดียวว่า OK`,
+    `Director health check (now ${new Date().toLocaleString(locale)}):\n\n` +
+    `Appointments in the next 12 hours:\n${upcoming}\n\nPending assigned work:\n${standing}\n\n` +
+    `Office notes:\n${board}\n\n` +
+    `If there is something the CEO should know now (an appointment is close, work is stuck, or a note needs attention), ` +
+    `write a short, clear notice in ${responseLanguage}. If everything is fine and nothing needs attention, ` +
+    `reply with exactly one word: OK.`,
     { noSub: true, logPrompt: "💓 Health check",
       filterText: (t) => (/^\s*OK\.?\s*$/i.test(t) ? "" : t) });
 }
@@ -1392,10 +1533,12 @@ setInterval(() => {
       c.notified = true;
       saveCal();
       broadcast({ type: "reminder", agent: "main", text: c.title, at: c.at });
+      const locale = officeLocale();
+      const responseLanguage = officeLanguageName();
       runClaude("main",
-        `แจ้งเตือนนัดหมายให้ CEO เดี๋ยวนี้: "${c.title}" เวลา ` +
-        `${new Date(c.at).toLocaleString("th-TH")} (อีกประมาณ ${Math.max(1, Math.round((c.at - now) / 60000))} นาที). ` +
-        `เขียนข้อความเตือนสั้นๆ เป็นกันเอง 1-2 ประโยค`,
+        `Remind the CEO about this appointment now: "${c.title}" at ` +
+        `${new Date(c.at).toLocaleString(locale)} (in about ${Math.max(1, Math.round((c.at - now) / 60000))} minutes). ` +
+        `Write a short, friendly reminder in ${responseLanguage}, 1-2 sentences.`,
         { noSub: true, logPrompt: `🔔 Reminder: ${c.title}` });
     }
   }
@@ -1439,7 +1582,12 @@ const MEDIA_NOTE = `
 อย่าบอกแค่ที่อยู่ไฟล์ หรือแปะลิงก์ดาวน์โหลด.
 </media-capability>`;
 
-function runCodexRuntime(agent, prompt, opts = {}) {
+function runJsonCliRuntime(agent, prompt, opts = {}, cfg) {
+  const runtime = cfg.runtime;
+  const model = cfg.model || runtime;
+  const threadField = cfg.threadField;
+  const newEntry = () => ({ key: "s" + Date.now(), sid: null, [threadField]: null, ts: Date.now(),
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] });
   const task = "t" + ++taskCounter;
   let entry = null;
   let isNew = false;
@@ -1447,8 +1595,7 @@ function runCodexRuntime(agent, prompt, opts = {}) {
     entry = (sess[agent] || []).find((e) => e.key === opts.session);
   else if (!opts.session) entry = latestSession(agent);
   if (!entry) {
-    entry = { key: "s" + Date.now(), sid: null, codexThread: null, ts: Date.now(),
-      title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] };
+    entry = newEntry();
     sess[agent] = sess[agent] || [];
     sess[agent].push(entry);
     isNew = true;
@@ -1456,8 +1603,7 @@ function runCodexRuntime(agent, prompt, opts = {}) {
   if (entry.proj && !projectDir(entry.proj)) entry.proj = null;
   if (!isNew && opts.project && projectDir(opts.project) &&
       entry.proj && entry.proj !== opts.project) {
-    entry = { key: "s" + Date.now(), sid: null, codexThread: null, ts: Date.now(),
-      title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] };
+    entry = newEntry();
     sess[agent].push(entry);
     isNew = true;
   }
@@ -1478,8 +1624,8 @@ function runCodexRuntime(agent, prompt, opts = {}) {
   saveSess();
   if (opts.onEntry) try { opts.onEntry(entry.key); } catch {}
 
-  broadcast({ type: "task.started", agent, task, session: entry.key, runtime: "codex",
-    model: "codex",
+  broadcast({ type: "task.started", agent, task, session: entry.key, runtime,
+    model,
     title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 90) });
   statBump("runs", agent);
   if (opts.resumable) pauseActive(agent, opts.resumePrompt || prompt, projId, entry.key, opts._tries);
@@ -1519,11 +1665,11 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
 ข้อยกเว้นเดียว: ถ้าเจ้าของสั่งให้อ่าน/รายงานด้วยเสียงแบบเต็มๆ ค่อยใส่เนื้อหายาวใน SPEAK ได้.
 </voice-capability>` : "";
   const mediaNote = agent.includes("#") ? "" : MEDIA_NOTE;
-  const spec = codexRuntime.codexSpawnSpec({
+  const spec = cfg.spawnSpec({
     cwd,
-    threadId: entry.codexThread || "",
-    useWsl: process.platform === "win32" && !!reg.codexUseWsl,
-    distro: reg.codexWslDistro || "",
+    threadId: entry[threadField] || "",
+    useWsl: process.platform === "win32" && !!reg[cfg.useWslField],
+    distro: reg[cfg.distroField] || "",
   });
   const child = spawn(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -1558,10 +1704,10 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
   const watchdog = new RunWatchdog({
     totalMs: RUN_TOTAL_MS, idleMs: RUN_IDLE_MS,
     onKill: (reason) => {
-      console.error(`[codex] watchdog: ${agent}/${task} killed — ${reason}`);
+      console.error(`[${runtime}] watchdog: ${agent}/${task} killed — ${reason}`);
       killTree(child);
       broadcast({ type: "task.failed", agent, task, session: entry.key,
-        runtime: "codex", model: "codex", reason: `watchdog: ${reason}` });
+        runtime, model, reason: `watchdog: ${reason}` });
       fireDone(`(watchdog: ${reason})`, false);
     },
   });
@@ -1576,7 +1722,7 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
       else if (isRateLimit(`${text || ""}\n${errText}\n${lastText}`)) {
         pausePause(agent, opts.resumePrompt || prompt, projId, entry.key);
         broadcast({ type: "chat.message", agent, task, session: entry.key,
-          runtime: "codex", model: "codex",
+          runtime, model,
           text: "⏸ Temporarily rate/usage limited. I paused this task and will resume automatically when quota returns." });
       } else pauseClear(entry.key);
     }
@@ -1591,7 +1737,7 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
     runChildren.delete(task);
     releaseProj();
     broadcast({ type: "task.completed", agent, task, session: entry.key,
-      runtime: "codex", model: "codex" });
+      runtime, model });
     autoRecoverOverflow(agent, prompt, opts, entry);
     return true;
   };
@@ -1643,12 +1789,12 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
     }
     if (!out) return;
     entry.log.push({ who: "agent", text: String(out).slice(0, 8000),
-      ts: Date.now(), model: "codex", runtime: "codex" });
+      ts: Date.now(), model, runtime });
     while (entry.log.length > 200) entry.log.shift();
     entry.ts = Date.now();
     saveSess();
     broadcast({ type: "chat.message", agent, task, text: out, session: entry.key,
-      model: "codex", runtime: "codex" });
+      model, runtime });
   };
 
   child.stdout.on("data", (c) => {
@@ -1658,33 +1804,33 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
       const line = buf.slice(0, i).trim();
       buf = buf.slice(i + 1);
       if (!line) continue;
-      const ev = codexRuntime.parseCodexJsonLine(line);
+      const ev = cfg.parseJsonLine(line);
       if (!ev) continue;
       watchdog.touch();
       if (ev.type === "thread.started" && ev.thread_id) {
-        entry.codexThread = ev.thread_id;
+        entry[threadField] = ev.thread_id;
         entry.ts = Date.now();
         saveSess();
       } else if (ev.type === "turn.started") {
         broadcast({ type: "task.progress", agent, task, session: entry.key,
-          runtime: "codex", model: "codex", tool: "codex: turn started" });
+          runtime, model, tool: `${runtime}: turn started` });
       } else if (ev.type === "item.started") {
-        const label = codexRuntime.codexProgressLabel(ev);
+        const label = cfg.progressLabel(ev);
         if (label) {
           acts.push(label);
           entry.log.push({ who: "tool", text: label, ts: Date.now() });
           while (entry.log.length > 200) entry.log.shift();
           saveSess();
           broadcast({ type: "task.progress", agent, task, session: entry.key,
-            runtime: "codex", model: "codex", tool: label });
+            runtime, model, tool: label });
         }
       } else if (ev.type === "item.completed") {
-        const txt = codexRuntime.codexTextFromEvent(ev);
+        const txt = cfg.textFromEvent(ev);
         if (txt) publishText(txt);
         else {
-          const label = codexRuntime.codexProgressLabel(ev);
+          const label = cfg.progressLabel(ev);
           if (label) broadcast({ type: "task.progress", agent, task, session: entry.key,
-            runtime: "codex", model: "codex", tool: label });
+            runtime, model, tool: label });
         }
       } else if (ev.type === "turn.completed") {
         turnClosed = true;
@@ -1692,11 +1838,11 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
         const inTok = (u.input_tokens || 0) + (u.cached_input_tokens || 0);
         const usage = { in: inTok, out: u.output_tokens || 0,
           reasoning: u.reasoning_output_tokens || 0, win: ctxWindow(agent) };
-        entry.lastUsage = { ...usage, model: "codex", ts: Date.now() };
+        entry.lastUsage = { ...usage, model, ts: Date.now() };
         entry.ts = Date.now();
         saveSess();
         broadcast({ type: "task.completed", agent, task, session: entry.key,
-          model: "codex", runtime: "codex", usage });
+          model, runtime, usage });
         statBump("done");
         if (subTasks.length) {
           doneFired = true;
@@ -1709,13 +1855,14 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
           maybeLearnSkill(agent, task, prompt, acts, lastText, projId);
         }
       } else if (ev.type === "error" || ev.type === "turn.failed") {
-        const msg = String(ev.message || ev.error || "codex failed");
+        const msg = String(ev.message || ev.error || `${runtime} failed`);
+        const friendly = friendlyAdapterError(msg, runtime);
         errText += "\n" + msg;
         if (!maybeRecover(msg)) {
           broadcast({ type: "task.failed", agent, task, session: entry.key,
-            runtime: "codex", model: "codex", reason: msg });
+            runtime, model, reason: msg });
           broadcast({ type: "chat.message", agent, task, session: entry.key,
-            runtime: "codex", model: "codex", text: "adapter error: " + msg });
+            runtime, model, text: friendly });
           statBump("failed");
           fireDone(msg, false);
         }
@@ -1726,13 +1873,14 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
     const s = c.toString();
     errText += s;
     if (errText.length > 8000) errText = errText.slice(-8000);
-    console.error("[codex]", s.trim());
+    console.error(`[${runtime}]`, s.trim());
   });
   child.on("error", (e) => {
+    const friendly = friendlyAdapterError(e.message, runtime);
     broadcast({ type: "task.failed", agent, task, session: entry.key,
-      runtime: "codex", model: "codex", reason: e.message });
+      runtime, model, reason: e.message });
     broadcast({ type: "chat.message", agent, task, session: entry.key,
-      runtime: "codex", model: "codex", text: "adapter error: " + e.message });
+      runtime, model, text: friendly });
     fireDone("", false);
   });
   child.on("close", (code) => {
@@ -1740,17 +1888,19 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
     if (maybeRecover("")) return;
     if (code === 0 && (turnClosed || lastText)) {
       if (!turnClosed) broadcast({ type: "task.completed", agent, task, session: entry.key,
-        runtime: "codex", model: "codex" });
+        runtime, model });
       fireDone(lastText, true);
       if (!turnClosed) maybeLearnSkill(agent, task, prompt, acts, lastText, projId);
       return;
     }
-    const reason = (errText.trim().split(/\r?\n/).slice(-4).join("\n") ||
-      `codex exited with code ${code}`);
+    const cleanErr = cleanRuntimeError(errText, runtime);
+    const reason = (cleanErr.split(/\r?\n/).slice(-4).join("\n") ||
+      `${runtime} exited with code ${code}`);
+    const friendly = friendlyAdapterError(reason, runtime);
     broadcast({ type: "task.failed", agent, task, session: entry.key,
-      runtime: "codex", model: "codex", reason });
-    if (reason) broadcast({ type: "chat.message", agent, task, session: entry.key,
-      runtime: "codex", model: "codex", text: "Codex runtime failed: " + reason });
+      runtime, model, reason });
+    if (friendly) broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
     statBump("failed");
     fireDone(reason, false);
   });
@@ -1760,9 +1910,239 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
   return task;
 }
 
+function runCodexRuntime(agent, prompt, opts = {}) {
+  return runJsonCliRuntime(agent, prompt, opts, {
+    runtime: "codex",
+    model: "codex",
+    label: "Codex",
+    threadField: "codexThread",
+    useWslField: "codexUseWsl",
+    distroField: "codexWslDistro",
+    spawnSpec: codexRuntime.codexSpawnSpec,
+    parseJsonLine: codexRuntime.parseCodexJsonLine,
+    progressLabel: codexRuntime.codexProgressLabel,
+    textFromEvent: codexRuntime.codexTextFromEvent,
+  });
+}
+
+function cleanHermesStderr(text) {
+  return hermesRuntime.cleanCliDiagnostic(text)
+    .split(/\r?\n/)
+    .filter((line) => {
+      const s = line.trim();
+      if (!s) return false;
+      if (/^session_id:\s*\S+/i.test(s)) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
+function cleanRuntimeError(text, runtime) {
+  const rt = String(runtime || "").toLowerCase();
+  if (rt === "codex" && codexRuntime.cleanCliDiagnostic)
+    return codexRuntime.cleanCliDiagnostic(text);
+  if (rt === "hermes" && hermesRuntime.cleanCliDiagnostic)
+    return cleanHermesStderr(text);
+  if (rt === "claude" && claudeRuntime.cleanCliDiagnostic)
+    return claudeRuntime.cleanCliDiagnostic(text);
+  return String(text || "").trim();
+}
+
+function runHermesRuntime(agent, prompt, opts = {}) {
+  const runtime = "hermes";
+  const model = "hermes";
+  const threadField = "hermesThread";
+  const task = "t" + ++taskCounter;
+  const newEntry = () => ({ key: "s" + Date.now(), sid: null, [threadField]: null, ts: Date.now(),
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] });
+  let entry = null;
+  let isNew = false;
+  if (opts.session && opts.session !== "new")
+    entry = (sess[agent] || []).find((e) => e.key === opts.session);
+  else if (!opts.session) entry = latestSession(agent);
+  if (!entry) {
+    entry = newEntry();
+    sess[agent] = sess[agent] || [];
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (entry.proj && !projectDir(entry.proj)) entry.proj = null;
+  if (!isNew && opts.project && projectDir(opts.project) &&
+      entry.proj && entry.proj !== opts.project) {
+    entry = newEntry();
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (opts.project && projectDir(opts.project) && (isNew || !entry.proj))
+    entry.proj = opts.project;
+  const projId = entry.proj && projectDir(entry.proj) ? entry.proj : null;
+  const cwd = projId ? projectDir(projId) : WORKSPACE;
+  if (projId) {
+    projRuns[projId] = (projRuns[projId] || 0) + 1;
+    projAgents[projId] = projAgents[projId] || {};
+    projAgents[projId][agent] = (projAgents[projId][agent] || 0) + 1;
+    broadcast({ type: "projects.changed" }, false);
+  }
+  entry.log = entry.log || [];
+  if (isNew && opts._notice) entry.log.push({ who: "agent", text: opts._notice, ts: Date.now() });
+  entry.log.push({ who: "you", text: String(opts.logPrompt || prompt).slice(0, 4000), ts: Date.now() });
+  while (entry.log.length > 200) entry.log.shift();
+  saveSess();
+  if (opts.onEntry) try { opts.onEntry(entry.key); } catch {}
+
+  broadcast({ type: "task.started", agent, task, session: entry.key, runtime, model,
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 90) });
+  statBump("runs", agent);
+  if (opts.resumable) pauseActive(agent, opts.resumePrompt || prompt, projId, entry.key, opts._tries);
+
+  const a = reg.agents[agent];
+  let preamble = "";
+  if (isNew && a && (a.prompt || a.persona || (a.skills || []).length)) {
+    preamble = `<persona>\nYou are "${a.name}" (${a.role}).\n${personaText(a)}\n`;
+    for (const sid of a.skills || []) {
+      const sk = reg.skills[sid];
+      if (sk) preamble += `\n<skill name="${sk.name}">\n${sk.content}\n</skill>\n`;
+    }
+    preamble += memoryNote(agent, String(opts.logPrompt || prompt), projId);
+    preamble += "</persona>\n\n";
+  }
+  const fullPrompt = preamble + prompt + projectNote();
+  let promptFile = "";
+  if (process.platform === "win32" && !!reg.hermesUseWsl) {
+    fs.mkdirSync(HERMES_PROMPT_DIR, { recursive: true });
+    promptFile = path.join(HERMES_PROMPT_DIR, `${task}.txt`);
+    fs.writeFileSync(promptFile, fullPrompt, "utf8");
+  }
+  const spec = hermesRuntime.hermesSpawnSpec({
+    cwd,
+    prompt: fullPrompt,
+    promptFile,
+    threadId: entry[threadField] || "",
+    useWsl: process.platform === "win32" && !!reg.hermesUseWsl,
+    distro: reg.hermesWslDistro || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: agent, OFFICE_TASK: task },
+  });
+  if (projId) {
+    (projChildren[projId] = projChildren[projId] || new Set()).add(child);
+    child.on("close", () => {
+      const s = projChildren[projId];
+      if (s) { s.delete(child); if (!s.size) delete projChildren[projId]; }
+    });
+  }
+  runChildren.set(task, { child, agent });
+
+  let outBuf = "", errText = "", doneFired = false;
+  const releaseProj = () => {
+    if (!projId) return;
+    projRuns[projId] = Math.max(0, (projRuns[projId] || 1) - 1);
+    const pa = projAgents[projId] || {};
+    pa[agent] = Math.max(0, (pa[agent] || 1) - 1);
+    if (!pa[agent]) delete pa[agent];
+    broadcast({ type: "projects.changed" }, false);
+  };
+  const finish = (text, ok) => {
+    if (doneFired) return;
+    doneFired = true;
+    watchdog.clear();
+    runChildren.delete(task);
+    if (promptFile) fs.rm(promptFile, { force: true }, () => {});
+    releaseProj();
+    if (opts.resumable) pauseClear(entry.key);
+    if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
+  };
+  const watchdog = new RunWatchdog({
+    totalMs: RUN_TOTAL_MS, idleMs: RUN_IDLE_MS,
+    onKill: (reason) => {
+      killTree(child);
+      broadcast({ type: "task.failed", agent, task, session: entry.key,
+        runtime, model, reason: `watchdog: ${reason}` });
+      finish(`(watchdog: ${reason})`, false);
+    },
+  });
+  watchdog.start();
+  child.stdout.on("data", (c) => { outBuf += c.toString(); watchdog.touch(); });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error("[hermes]", s.trim());
+    watchdog.touch();
+  });
+  child.on("error", (e) => {
+    const friendly = friendlyAdapterError(e.message, runtime);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime, model, reason: e.message });
+    broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
+    statBump("failed");
+    finish("", false);
+  });
+  child.on("close", (code) => {
+    if (doneFired) return;
+    const parsed = hermesRuntime.parseHermesTextOutput(outBuf);
+    const errParsed = hermesRuntime.parseHermesTextOutput(errText);
+    const sessionId = parsed.sessionId || errParsed.sessionId;
+    if (sessionId) {
+      entry[threadField] = sessionId;
+      saveSess();
+    }
+    const text = (opts.filterText ? opts.filterText(parsed.text) : parsed.text) || "";
+    if (code === 0 && text) {
+      entry.log.push({ who: "agent", text: text.slice(0, 8000), ts: Date.now(), model, runtime });
+      entry.ts = Date.now();
+      while (entry.log.length > 200) entry.log.shift();
+      saveSess();
+      broadcast({ type: "chat.message", agent, task, text, session: entry.key, model, runtime });
+      broadcast({ type: "task.completed", agent, task, session: entry.key, model, runtime });
+      statBump("done");
+      maybeLearnSkill(agent, task, prompt, [], text, projId);
+      finish(text, true);
+      return;
+    }
+    const cleanErr = cleanHermesStderr(errText);
+    const reason = (cleanErr.split(/\r?\n/).slice(-4).join("\n") ||
+      parsed.text || `hermes exited with code ${code}`);
+    const friendly = friendlyAdapterError(reason, runtime);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime, model, reason });
+    if (friendly) broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
+    statBump("failed");
+    finish(reason, false);
+  });
+  return task;
+}
+
+function friendlyAdapterError(message, runtime) {
+  const s = cleanRuntimeError(message, runtime);
+  const rt = String(runtime || "").toLowerCase();
+  if (/command not found:\s*codex|codex:\s+not found|codex: command not found/i.test(s))
+    return "Codex CLI 未找到。WSL 中没有可执行的 codex 命令；请安装/修复 Codex CLI，或让 BagIdea 通过 npx @openai/codex 调用。";
+  if (/Missing optional dependency @openai\/codex-linux-x64/i.test(s))
+    return "Codex CLI 安装不完整：缺少 @openai/codex-linux-x64。请在 WSL 中重新安装 Codex：npm install -g @openai/codex@latest。";
+  if (/could not determine executable to run/i.test(s) && rt === "codex")
+    return "Codex CLI 未能通过 npx 启动。请在 WSL 中安装 Codex：npm install -g @openai/codex@latest。";
+  if (/spawn\s+hermes\s+ENOENT/i.test(s))
+    return "Hermes CLI 未找到。请先安装 Hermes CLI，或把该 agent 的 Runtime 改为 Claude/Codex。";
+  if (/spawn\s+codex\s+ENOENT/i.test(s))
+    return "Codex CLI 未找到。请先安装 Codex CLI，或在设置中开启 Codex 的 WSL bridge。";
+  if (/spawn\s+claude\s+ENOENT/i.test(s))
+    return "Claude Code CLI 未找到。请检查 Claude Code 或 WSL bridge 配置。";
+  if (/ENOENT/i.test(s) && rt)
+    return `${runtimeConfig.runtimeLabel(rt)} CLI 未找到。请检查该 runtime 的安装和 PATH 配置。`;
+  return s || `${runtimeConfig.runtimeLabel(rt)} runtime failed.`;
+}
+
 function runAgent(agent, prompt, opts = {}) {
   const runtime = runtimeConfig.effectiveAgentRuntime(reg, agent);
   if (runtime === "codex") return runCodexRuntime(agent, prompt, opts);
+  if (runtime === "hermes") return runHermesRuntime(agent, prompt, opts);
   return runClaudeRuntime(agent, prompt, opts);
 }
 
@@ -1812,10 +2192,7 @@ function runClaudeRuntime(agent, prompt, opts = {}) {
   // file under this cwd; missing means a fresh claude session here (our own
   // thread log keeps the visible history).
   if (entry.sid) {
-    const enc = String(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-    const sidFile = path.join(require("os").homedir(), ".claude", "projects",
-      enc, entry.sid + ".jsonl");
-    if (!fs.existsSync(sidFile)) entry.sid = null;
+    if (!claudeSessionFileExists(cwd, entry.sid)) entry.sid = null;
   }
   // Claude-Code-style proactive compaction: a resumed thread that's grown near this
   // backend's context budget is summarized + continued on a FRESH thread before it
@@ -1924,9 +2301,8 @@ function runClaudeRuntime(agent, prompt, opts = {}) {
   // Swappable brain: route this agent to its configured backend (else plain Claude).
   const route = brainRoute(agent);
   if (route.modelArgs.length) args.push(...route.modelArgs);
-  const child = spawn("claude", args, {
+  const child = spawnClaude(args, {
     cwd,
-    shell: true,
     env: { ...process.env, ...(reg.apiKeys || {}), ...route.env, OFFICE_ADAPTER: "1", OFFICE_AGENT: agent, OFFICE_TASK: task },
   });
   // Track the run per project so the owner can stop it and take the project over.
@@ -2158,8 +2534,9 @@ model "${mtag}". If the owner asks which AI/model/LLM you are, answer truthfully
     console.error("[claude]", s.trim());
   });
   child.on("error", (e) => {
-    broadcast({ type: "task.failed", agent, task });
-    broadcast({ type: "chat.message", agent, task, text: "adapter error: " + e.message });
+    broadcast({ type: "task.failed", agent, task, reason: e.message, runtime: "claude", model: mtag });
+    broadcast({ type: "chat.message", agent, task, text: friendlyAdapterError(e.message, "claude"),
+      runtime: "claude", model: mtag });
     fireDone("", false);
   });
   child.on("close", () => { if (!maybeRecover("")) fireDone(lastText, !!lastText); });
@@ -2316,6 +2693,22 @@ function ceoFlow(prompt, session, project, opts = {}) {
       if (opts.relay && ok && out) try { channels.relay("👑 " + out); } catch {}
       if (opts.onDone) opts.onDone(out, ok);   // channels/CLI hook the reply ride-back here
     },
+  });
+}
+
+function mentionShortcutFlow(ownerPrompt, mention, session, project, opts = {}) {
+  const target = mention.agent;
+  const inst = mention.instruction;
+  const proj = project || projectFromPrompt(inst);
+  const tl = sess[target] || [];
+  const te = tl.length ? tl.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
+  return runClaude(target, inst, {
+    project: proj,
+    session: proj ? ((!te || te.proj !== proj) ? "new" : undefined) : "new",
+    logPrompt: opts.logPrompt || ownerPrompt,
+    resumable: true,
+    resumePrompt: inst,
+    onDone: opts.onDone,
   });
 }
 
@@ -2550,8 +2943,11 @@ function runSubAgents(parentId, parentEntry, tasks, onDone) {
 // One ghost: a lean twin of runClaude. Pre-created "@sub" entry, parent's
 // tools, no skills preamble, no resume, and never splits further.
 function runSub(parentId, subId, taskText, entry, onDone) {
-  if (runtimeConfig.effectiveAgentRuntime(reg, parentId) === "codex")
+  const runtime = runtimeConfig.effectiveAgentRuntime(reg, parentId);
+  if (runtime === "codex")
     return runCodexSub(parentId, subId, taskText, entry, onDone);
+  if (runtime === "hermes")
+    return runHermesSub(parentId, subId, taskText, entry, onDone);
   const a = reg.agents[parentId] || { name: parentId, role: "Staff" };
   const picked = a.tools && a.tools.length ? a.tools
     : ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
@@ -2585,8 +2981,8 @@ function runSub(parentId, subId, taskText, entry, onDone) {
   // Ghosts run on the parent agent's backend (the swappable brain).
   const route = brainRoute(parentId);
   if (route.modelArgs.length) args.push(...route.modelArgs);
-  const child = spawn("claude", args, {
-    cwd: subCwd, shell: true,
+  const child = spawnClaude(args, {
+    cwd: subCwd,
     env: { ...process.env, ...(reg.apiKeys || {}), ...route.env, OFFICE_ADAPTER: "1", OFFICE_AGENT: subId, OFFICE_TASK: entry.key },
   });
   child.stdin.write(
@@ -2649,14 +3045,16 @@ function runSub(parentId, subId, taskText, entry, onDone) {
   child.on("close", () => finish(!!lastText));
 }
 
-function runCodexSub(parentId, subId, taskText, entry, onDone) {
+function runJsonCliSub(parentId, subId, taskText, entry, onDone, cfg) {
+  const runtime = cfg.runtime;
+  const model = cfg.model || runtime;
   const a = reg.agents[parentId] || { name: parentId, role: "Staff", prompt: "" };
   const subCwd = (entry.proj && projectDir(entry.proj)) || WORKSPACE;
-  const spec = codexRuntime.codexSpawnSpec({
+  const spec = cfg.spawnSpec({
     cwd: subCwd,
-    threadId: entry.codexThread || "",
-    useWsl: process.platform === "win32" && !!reg.codexUseWsl,
-    distro: reg.codexWslDistro || "",
+    threadId: entry[cfg.threadField] || "",
+    useWsl: process.platform === "win32" && !!reg[cfg.useWslField],
+    distro: reg[cfg.distroField] || "",
   });
   const child = spawn(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -2690,40 +3088,40 @@ function runCodexSub(parentId, subId, taskText, entry, onDone) {
       const line = buf.slice(0, i).trim();
       buf = buf.slice(i + 1);
       if (!line) continue;
-      const ev = codexRuntime.parseCodexJsonLine(line);
+      const ev = cfg.parseJsonLine(line);
       if (!ev) continue;
       if (ev.type === "thread.started" && ev.thread_id) {
-        entry.codexThread = ev.thread_id;
+        entry[cfg.threadField] = ev.thread_id;
         saveSess();
       } else if (ev.type === "item.started") {
-        const label = codexRuntime.codexProgressLabel(ev);
+        const label = cfg.progressLabel(ev);
         if (!label) continue;
         entry.log.push({ who: "tool", text: label, ts: Date.now() });
         while (entry.log.length > 200) entry.log.shift();
         saveSess();
         broadcast({ type: "subagent.progress", agent: parentId, sub: subId,
-          tool: label, session: entry.key, runtime: "codex", model: "codex" });
+          tool: label, session: entry.key, runtime, model });
       } else if (ev.type === "item.completed") {
-        const txt = codexRuntime.codexTextFromEvent(ev);
+        const txt = cfg.textFromEvent(ev);
         if (txt) {
           lastText = txt;
           entry.log.push({ who: "agent", text: txt.slice(0, 8000),
-            ts: Date.now(), runtime: "codex", model: "codex" });
+            ts: Date.now(), runtime, model });
           while (entry.log.length > 200) entry.log.shift();
           entry.ts = Date.now();
           saveSess();
           broadcast({ type: "chat.message", agent: parentId, sub: subId,
-            text: txt, session: entry.key, runtime: "codex", model: "codex" });
+            text: txt, session: entry.key, runtime, model });
         } else {
-          const label = codexRuntime.codexProgressLabel(ev);
+          const label = cfg.progressLabel(ev);
           if (label) broadcast({ type: "subagent.progress", agent: parentId, sub: subId,
-            tool: label, session: entry.key, runtime: "codex", model: "codex" });
+            tool: label, session: entry.key, runtime, model });
         }
       } else if (ev.type === "turn.completed") {
         statBump("done");
         finish(true);
       } else if (ev.type === "error" || ev.type === "turn.failed") {
-        errText += "\n" + String(ev.message || ev.error || "codex failed");
+        errText += "\n" + String(ev.message || ev.error || `${runtime} failed`);
         statBump("failed");
         finish(false);
       }
@@ -2733,10 +3131,88 @@ function runCodexSub(parentId, subId, taskText, entry, onDone) {
     const s = c.toString();
     errText += s;
     if (errText.length > 8000) errText = errText.slice(-8000);
-    console.error(`[sub:${subId}:codex]`, s.trim());
+    console.error(`[sub:${subId}:${runtime}]`, s.trim());
   });
   child.on("error", (e) => { errText += "\n" + e.message; finish(false); });
   child.on("close", () => finish(!!lastText));
+}
+
+function runCodexSub(parentId, subId, taskText, entry, onDone) {
+  return runJsonCliSub(parentId, subId, taskText, entry, onDone, {
+    runtime: "codex",
+    model: "codex",
+    threadField: "codexThread",
+    useWslField: "codexUseWsl",
+    distroField: "codexWslDistro",
+    spawnSpec: codexRuntime.codexSpawnSpec,
+    parseJsonLine: codexRuntime.parseCodexJsonLine,
+    progressLabel: codexRuntime.codexProgressLabel,
+    textFromEvent: codexRuntime.codexTextFromEvent,
+  });
+}
+
+function runHermesSub(parentId, subId, taskText, entry, onDone) {
+  const runtime = "hermes";
+  const model = "hermes";
+  const a = reg.agents[parentId] || { name: parentId, role: "Staff", prompt: "" };
+  const subCwd = (entry.proj && projectDir(entry.proj)) || WORKSPACE;
+  const prompt =
+    `You are a temporary SUB-AGENT — a parallel clone of "${a.name}" (${a.role}) at this AI office.` +
+    (a.prompt ? `\nParent persona:\n${a.prompt}\n` : "\n") +
+    `You were split off for ONE focused job. Do it fast and directly; your final message must BE the result ` +
+    `(data, findings, answer) — no meta talk, no asking back. Reply in the language of the job. Never split further.\n\nJOB: ${taskText}`;
+  const spec = hermesRuntime.hermesSpawnSpec({
+    cwd: subCwd,
+    prompt,
+    threadId: entry.hermesThread || "",
+    useWsl: process.platform === "win32" && !!reg.hermesUseWsl,
+    distro: reg.hermesWslDistro || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: subId, OFFICE_TASK: entry.key },
+  });
+  let outBuf = "", errText = "", finished = false;
+  const finish = (text, ok) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(watchdog);
+    onDone(text || (!ok ? errText.trim() : ""), ok);
+  };
+  const watchdog = setTimeout(() => {
+    killTree(child);
+    finish("(watchdog: total timeout)", false);
+  }, 6 * 60000);
+  child.stdout.on("data", (c) => { outBuf += c.toString(); });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error(`[sub:${subId}:${runtime}]`, s.trim());
+  });
+  child.on("error", (e) => { errText += "\n" + e.message; finish("", false); });
+  child.on("close", (code) => {
+    const parsed = hermesRuntime.parseHermesTextOutput(outBuf);
+    const errParsed = hermesRuntime.parseHermesTextOutput(errText);
+    const sessionId = parsed.sessionId || errParsed.sessionId;
+    if (sessionId) { entry.hermesThread = sessionId; saveSess(); }
+    if (code === 0 && parsed.text) {
+      entry.log.push({ who: "agent", text: parsed.text.slice(0, 8000),
+        ts: Date.now(), runtime, model });
+      while (entry.log.length > 200) entry.log.shift();
+      entry.ts = Date.now();
+      saveSess();
+      broadcast({ type: "chat.message", agent: parentId, sub: subId,
+        text: parsed.text, session: entry.key, runtime, model });
+      statBump("done");
+      finish(parsed.text, true);
+    } else {
+      statBump("failed");
+      finish(parsed.text || errText.trim(), false);
+    }
+  });
 }
 
 // ---------------------------------------------------------------- voice
@@ -3420,6 +3896,8 @@ const MOOD_LINES = {
 };
 let lastAmbient = Date.now();
 function ambientTick(now) {
+  const min = Number(reg.socialMin !== undefined ? reg.socialMin : 0);
+  if (!min) return;
   if (activeDiscussions > 0 || agentBusy.size > 0) return;
   if (now - lastAmbient < 55 * 1000) return;        // at most once every ~55s
   if (Math.random() > 0.45) return;                 // ...and only ~45% of those
@@ -3512,9 +3990,9 @@ async function runDiscussion(ids, topic, rounds, social) {
           addProposal(id, ids, pm[1], pm[2]);
         }
         if (line) {
-          entry.log.push({ who: id, text: line, ts: Date.now() });
+          entry.log.push({ who: id, text: line, ts: Date.now(), social: !!social });
           saveSess();
-          broadcast({ type: "chat.message", agent: id, task, text: line, session: entry.key });
+          broadcast({ type: "chat.message", agent: id, task, text: line, session: entry.key, social: !!social });
         }
       }
     }
@@ -3611,6 +4089,11 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     try { res.end(fs.readFileSync(path.join(__dirname, "winlang.js"))); }
     catch { res.end("window.WinLang={build:async()=>({lang:'th',map:{},tr:s=>s,ensure:async()=>{}})};"); }
+
+  } else if (req.method === "GET" && req.url.split("?")[0] === "/activity-filter.js") {
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    try { res.end(fs.readFileSync(ACTIVITY_FILTER)); }
+    catch { res.end("window.BagideaActivityFilter={shouldShowInOfficeFeed:()=>true,shouldShowInThreadLog:()=>true};"); }
 
   } else if (req.method === "GET" && req.url.split("?")[0] === "/watch") {
     // Read-only live activity stream for an agent (opened as its own window) —
@@ -3727,17 +4210,22 @@ const server = http.createServer((req, res) => {
         // CEO orders route through the Director; talking to the Director
         // directly gives him the same dispatch power. New threads adopt the
         // requested project workspace.
-        const task = agent === "ceo"
-          ? ceoFlow(prompt, session, project,
+        const mention = parseAgentMentionShortcut(origPrompt, reg.agents);
+        const task = mention
+          ? mentionShortcutFlow(origPrompt, mention, session, project,
+              { logPrompt: voice ? "🎤👑 " + origPrompt : origPrompt,
+                onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
+          : agent === "ceo"
+            ? ceoFlow(prompt, session, project,
               { logPrompt: voice ? "🎤👑 (voice order) " + origPrompt : origPrompt,
                 relay: true,  // mirror the CEO conversation to connected channels
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
-          : agent === "main"
-            ? runClaude("main", prompt + directorNote(),
+            : agent === "main"
+              ? runClaude("main", prompt + directorNote(),
                 { session, project, logPrompt: origPrompt,
                   filterText: makeDelegateFilter(0, session),
                   onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
-            : runClaude(agent, prompt, { session, project, logPrompt: origPrompt,
+              : runClaude(agent, prompt, { session, project, logPrompt: origPrompt,
                 resumable: true, resumePrompt: origPrompt,  // a member's direct task auto-resumes
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined });
         if (!wait) {
@@ -3795,29 +4283,36 @@ const server = http.createServer((req, res) => {
         const dir = entry.proj && projectDir(entry.proj) ? projectDir(entry.proj) : WORKSPACE;
         const rt = runtimeConfig.effectiveAgentRuntime(reg, agent);
         const shq = (s) => "'" + String(s).replace(/'/g, "'\"'\"'") + "'";
-        const psq = (s) => "'" + String(s).replace(/'/g, "''") + "'";
-        const psCommand = (s) => `-Command "${String(s).replace(/`/g, "``").replace(/"/g, "`\"")}"`;
         const codexThread = entry.codexThread || "";
-        const codexCmd = codexThread ? `codex resume ${shq(codexThread)}` : "codex";
+        const hermesThread = entry.hermesThread || "";
         let resume;
-        if (rt === "codex") {
-          if (process.platform === "win32" && reg.codexUseWsl) {
-            const wslCwd = codexRuntime.mapWindowsPathToWsl(dir);
-            const distro = String(reg.codexWslDistro || "").trim();
-            const distroArg = distro ? `-d ${psq(distro)} ` : "";
-            resume = `wsl.exe ${distroArg}--exec /bin/sh -lc ${psq(`cd ${shq(wslCwd)} && exec ${codexCmd}`)}`;
+        let winPsCmd = "";
+        if (rt === "codex" || rt === "hermes") {
+          const useWsl = rt === "codex" ? reg.codexUseWsl : reg.hermesUseWsl;
+          const distroValue = rt === "codex" ? reg.codexWslDistro : reg.hermesWslDistro;
+          const args = rt === "codex"
+            ? (codexThread ? ["resume", codexThread] : [])
+            : (hermesThread ? ["--resume", hermesThread] : ["--cli"]);
+          if (process.platform === "win32" && useWsl) {
+            winPsCmd = wslCliLaunchPsCommand(dir, rt, args, String(distroValue || "").trim());
+            resume = "";
           } else {
-            resume = codexCmd;
+            resume = [rt, ...args].map(shq).join(" ");
           }
         } else {
-          resume = entry.sid ? `claude --resume ${shq(entry.sid)}` : "claude -c";
+          resume = entry.sid
+            ? claudeRuntime.claudeResumeCommand({ cwd: dir, sid: entry.sid })
+            : claudeRuntime.claudeContinueCommand({ cwd: dir });
         }
         if (process.platform === "win32") {
           const title = `BAGIDEA_${agent}_${entry.key}`.replace(/[^\w-]/g, "_");
-          const psCmd = psCommand(resume);
+          const psCmd = rt === "claude" && claudeUseWsl()
+            ? wslClaudeLaunchPsCommand(dir, entry.sid ? ["--resume", entry.sid] : ["-c"])
+            : (winPsCmd || powerShellEncodedCommand(resume));
+          const terminalCmd = `powershell -NoLogo -NoExit -ExecutionPolicy Bypass ${psCmd}`;
           const line = HAS_WT
-            ? `/c start "" "${WT_EXE}" -w new new-tab --title "${title}" --suppressApplicationTitle -d "${dir}" powershell -NoLogo -NoExit -ExecutionPolicy Bypass ${psCmd}`
-            : `/c start "${title}" /D "${dir}" conhost.exe powershell -NoLogo -NoExit -ExecutionPolicy Bypass ${psCmd}`;
+            ? `/c start "" "${WT_EXE}" -w new new-tab --title "${title}" --suppressApplicationTitle -d "${dir}" ${terminalCmd}`
+            : `/c start "${title}" /D "${dir}" conhost.exe ${terminalCmd}`;
           spawn("cmd.exe", [line], { windowsVerbatimArguments: true, windowsHide: true, detached: true });
         } else if (process.platform === "darwin") {
           const script = `tell application "Terminal" to do script "${appleScriptString(`cd ${shq(dir)} && ${resume}`)}"`;
@@ -4184,18 +4679,17 @@ const server = http.createServer((req, res) => {
           } else if (process.platform === "darwin") {
             // macOS: Open a new terminal window, cd to project dir, run claude
             const cmd = psCmd || "";
-            // psCmd on Windows is `-Command "..."` — extract the inner command for macOS
-            const innerCmd = cmd.match(/-Command\s+"(.+)"/)?.[1] || "";
+            // psCmd is the Windows PowerShell command wrapper; extract its payload for macOS.
+            const innerCmd = powerShellCommandText(cmd);
             const shellCmd = innerCmd || "exec bash";
             const script = `tell application "Terminal" to do script "cd '${dir.replace(/'/g, "'\\''")}' && ${shellCmd}"`;
             spawn("osascript", ["-e", script], { detached: true });
           } else {
             // Linux: open a terminal at `dir` running the command. The Windows psCmd is
-            // `-Command "<cmd> #marker"`; extract <cmd> (the #marker is also a bash
+            // Extract <cmd> from the Windows PowerShell wrapper (the #marker is also a bash
             // comment, so it's harmless). We don't track the window — winproj() is a
             // no-op on Linux, so hide/resume just don't apply.
-            const m = String(psCmd).match(/^-Command "([\s\S]*)"$/);
-            const inner = m ? m[1] : "";
+            const inner = powerShellCommandText(psCmd);
             const bashLine = `cd ${JSON.stringify(dir)}; ${inner ? inner + "; " : ""}exec bash`;
             const terms = [
               ["x-terminal-emulator", ["-e", "bash", "-lc", bashLine]],
@@ -4234,8 +4728,11 @@ const server = http.createServer((req, res) => {
           // Smart entry: resume the NEWEST session explicitly — straight into
           // where the work happened. Fresh claude only when there's no session.
           const sid = newestSid(dir);
-          const cmd = sid ? `claude --resume ${sid}` : "claude";
-          launch(`-Command "${cmd} #BAGIDEA_PROJ_${id}"`, `BAGIDEA_PROJ_${id}`);
+          const cmd = claudeRuntime.claudeResumeCommand({ cwd: dir, sid });
+          const psCmd = process.platform === "win32" && claudeUseWsl()
+            ? wslClaudeLaunchPsCommand(dir, sid ? ["--resume", sid] : [])
+            : powerShellEncodedCommand(`${cmd} #BAGIDEA_PROJ_${id}`);
+          launch(psCmd, `BAGIDEA_PROJ_${id}`);
           setTimeout(sweepProjects, 2500);
         }
         res.writeHead(200); res.end("ok");
@@ -4627,16 +5124,49 @@ const server = http.createServer((req, res) => {
 
   } else if (req.method === "GET" && req.url === "/claude/auth") {
     // 🔓 Is Claude usable? Logged-in (credentials file / oauthAccount) OR API key set.
-    const home = require("os").homedir();
     let loggedIn = false;
-    try { loggedIn = fs.existsSync(path.join(home, ".claude", ".credentials.json")); } catch {}
-    if (!loggedIn) {
-      try { const j = JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8"));
-        loggedIn = !!(j && (j.oauthAccount || j.userID)); } catch {}
+    let cliOk = false, version = "", error = "";
+    const useWsl = claudeUseWsl();
+    const distro = claudeWslDistro();
+    try {
+      if (useWsl) {
+        const spec = claudeRuntime.claudeAuthCheckSpawnSpec({ useWsl, distro });
+        const out = require("child_process").execFileSync(spec.command, spec.args, {
+          timeout: 8000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        });
+        loggedIn = String(out || "").includes("logged-in");
+      } else {
+        const home = require("os").homedir();
+        try { loggedIn = fs.existsSync(path.join(home, ".claude", ".credentials.json")); } catch {}
+        if (!loggedIn) {
+          try { const j = JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8"));
+            loggedIn = !!(j && (j.oauthAccount || j.userID)); } catch {}
+        }
+      }
+    } catch (e) { error = String(e.message || e); }
+    try {
+      const spec = claudeRuntime.claudeVersionSpawnSpec({ useWsl, distro });
+      const out = require("child_process").execFileSync(spec.command, spec.args, {
+        timeout: 8000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      });
+      version = claudeRuntime.parseVersionOutput(out);
+      cliOk = true;
+    } catch (e) {
+      if (!error) error = String(e.message || e);
     }
     const viaKey = !!(reg.apiKeys && reg.apiKeys.ANTHROPIC_API_KEY);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ loggedIn, viaKey, connected: loggedIn || viaKey }));
+    res.end(JSON.stringify({
+      loggedIn,
+      viaKey,
+      connected: (loggedIn || viaKey) && cliOk,
+      cliOk,
+      version,
+      useWsl,
+      distro,
+      command: useWsl ? "wsl.exe shell claude" : "claude",
+      error: error.slice(0, 500),
+    }));
 
   } else if (req.method === "GET" && req.url === "/codex/status") {
     // Codex owns its own auth/config. We only verify that the CLI reachable from
@@ -4675,14 +5205,73 @@ const server = http.createServer((req, res) => {
       }
     });
 
+  } else if (req.method === "GET" && req.url === "/hermes/status") {
+    // Hermes owns its own auth/config. We only verify that the CLI reachable from
+    // this daemon can start; on Windows it may be bridged through WSL.
+    const { execFile } = require("child_process");
+    const useWsl = process.platform === "win32" && !!reg.hermesUseWsl;
+    const distro = String(reg.hermesWslDistro || "");
+    const spec = hermesRuntime.hermesVersionSpawnSpec({ useWsl, distro });
+    execFile(spec.command, spec.args, { timeout: 8000, windowsHide: true }, (e, out, err) => {
+      const version = hermesRuntime.parseVersionOutput(out || err);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: !e,
+        connected: !e,
+        version,
+        useWsl,
+        distro,
+        command: useWsl ? "wsl.exe shell hermes" : "hermes",
+        error: e ? String(e.message || e).slice(0, 500) : "",
+      }));
+    });
+
+  } else if (req.method === "POST" && req.url === "/hermes/config") {
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body || "{}");
+        reg.hermesUseWsl = !!p.useWsl;
+        reg.hermesWslDistro = String(p.distro || "").trim().slice(0, 80);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/claude/config") {
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body || "{}");
+        reg.claudeUseWsl = !!p.useWsl;
+        reg.claudeWslDistro = String(p.distro || "").trim().slice(0, 80);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
   } else if (req.method === "POST" && req.url === "/claude/login") {
     // 🔓 Open a terminal running `claude` so the user completes browser OAuth login.
     try {
-      if (process.platform === "win32")
-        spawn("cmd", ["/c", "start", "Claude Login", "cmd", "/k", "claude"], { detached: true });
+      const cmd = claudeRuntime.claudeLoginCommand({
+        useWsl: claudeUseWsl(),
+        distro: claudeWslDistro(),
+      });
+      if (process.platform === "win32") {
+        const psCmd = claudeUseWsl() ? wslClaudeLaunchPsCommand(WORKSPACE, []) : powerShellEncodedCommand(cmd);
+        spawn("cmd", ["/c", "start", "Claude Login", "powershell", "-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", psCmd], { detached: true });
+      }
       else if (process.platform === "darwin")
-        spawn("osascript", ["-e", 'tell application "Terminal" to do script "claude"'], { detached: true });
-      else spawn("x-terminal-emulator", ["-e", "claude"], { detached: true });
+        spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(cmd)}`], { detached: true });
+      else spawn("x-terminal-emulator", ["-e", cmd], { detached: true });
       res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
     } catch (e) { res.writeHead(500); res.end(String(e.message)); }
 
@@ -5248,31 +5837,21 @@ const server = http.createServer((req, res) => {
     // AND picks the skills + tools that fit the role from what's available.
     readBody(req, async (body) => {
       try {
-        const { name = "Agent", role = "Specialist", brief = "" } = JSON.parse(body);
+        const { name = "Agent", role = "Specialist", brief = "", lang = "" } = JSON.parse(body);
         const skillMenu = Object.entries(reg.skills)
           .map(([id, s]) => `  ${id}: ${s.description || s.name || id}`).join("\n");
         const toolMenu = Object.entries(BUILTIN_TOOLS)
           .map(([id, d]) => `  ${id}: ${d}`).join("\n");
         const skillIds = Object.keys(reg.skills);
         const toolIds = Object.keys(BUILTIN_TOOLS);
-        const draft = await claudeText(
-          `Design a complete persona for an AI agent in a software office, and ` +
-          `pick the skills + tools that fit its job.\n` +
-          `Agent name: ${name}\nJob title: ${role}\nOwner's brief: ${brief}\n\n` +
-          `Available SKILLS (pick by id, only ones that truly fit the role):\n${skillMenu}\n\n` +
-          `Available TOOLS (pick by exact name, only what the job needs — fewer is better; ` +
-          `a manager/coordinator needs very few, a builder needs more):\n${toolMenu}\n\n` +
-          `Output STRICT JSON only (no markdown fences):\n` +
-          `{"prompt":"core mission & identity, second person, 3-6 sentences",` +
-          `"expertise":"bullet-ish lines: concrete skills, tools, domains they own",` +
-          `"personality":"tone of voice, character quirks, how they talk",` +
-          `"language":"primary reply language, e.g. ไทย / English / ตามผู้ใช้",` +
-          `"rules":"3-6 imperative work rules (do/don't), one per line",` +
-          `"skills":["skill-id", ...],` +
-          `"tools":["ToolName", ...]}\n` +
-          `Every field must genuinely reflect the brief. skills/tools MUST be chosen ` +
-          `ONLY from the lists above (exact ids/names). Match the brief's language ` +
-          `(Thai brief → Thai text fields; skill ids and tool names stay verbatim).`);
+        const draft = await claudeText(personaDraft.buildPersonaDraftPrompt({
+          name,
+          role,
+          brief,
+          lang,
+          skillMenu,
+          toolMenu,
+        }));
         let out = { prompt: draft };
         const m = draft.match(/\{[\s\S]*\}/);
         if (m) try { out = JSON.parse(m[0]); } catch {}

@@ -10,9 +10,11 @@ const {
 
 test("normalizeRuntime accepts only known runtimes", () => {
   assert.strictEqual(normalizeRuntime("codex"), "codex");
+  assert.strictEqual(normalizeRuntime("hermes"), "hermes");
   assert.strictEqual(normalizeRuntime("claude"), "claude");
   assert.strictEqual(normalizeRuntime("Claude Code"), "claude");
   assert.strictEqual(normalizeRuntime("CODEX"), "codex");
+  assert.strictEqual(normalizeRuntime("HERMES"), "hermes");
   assert.strictEqual(normalizeRuntime("bad"), "");
   assert.strictEqual(normalizeRuntime(""), "");
   assert.strictEqual(normalizeRuntime(null), "");
@@ -72,6 +74,7 @@ test("effectiveAgentRuntime returns only the runtime string", () => {
 test("runtimeLabel is stable for UI badges", () => {
   assert.strictEqual(runtimeLabel("claude"), "Claude Code");
   assert.strictEqual(runtimeLabel("codex"), "Codex");
+  assert.strictEqual(runtimeLabel("hermes"), "Hermes");
   assert.strictEqual(runtimeLabel("bad"), "Claude Code");
 });
 

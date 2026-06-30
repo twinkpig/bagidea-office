@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   codexExecArgs,
+  codexInteractiveSpawnSpec,
   codexSpawnSpec,
   codexVersionSpawnSpec,
   parseCodexJsonLine,
@@ -90,6 +91,30 @@ test("codexSpawnSpec runs through the WSL user shell on Windows when requested",
   assert.match(spec.args[5], /codex/);
   assert.match(spec.args[5], /exec/);
   assert.match(spec.args[5], /\/mnt\/f\/repo/);
+  assert.match(spec.args[5], /npx --yes @openai\/codex/);
+  assert.match(spec.args[5], /HOME\/\.nvm\/versions\/node\/v25\.5\.0\/bin/);
+  assert.doesNotMatch(spec.args[5], /~\/\.zshrc|~\/\.profile|getent passwd/);
+  assert.strictEqual(spec.cwd, "F:\\repo");
+  assert.strictEqual(spec.shell, false);
+});
+
+test("codexInteractiveSpawnSpec opens sessions through the WSL user shell", () => {
+  const spec = codexInteractiveSpawnSpec({
+    platform: "win32",
+    cwd: "F:\\repo",
+    threadId: "tid-1",
+    useWsl: true,
+    distro: "Ubuntu-24.04",
+  });
+  assert.strictEqual(spec.command, "wsl.exe");
+  assert.deepStrictEqual(spec.args.slice(0, 5), ["-d", "Ubuntu-24.04", "--exec", "/bin/sh", "-lc"]);
+  assert.match(spec.args[5], /\/mnt\/f\/repo/);
+  assert.match(spec.args[5], /codex/);
+  assert.match(spec.args[5], /resume/);
+  assert.match(spec.args[5], /tid-1/);
+  assert.match(spec.args[5], /npx --yes @openai\/codex/);
+  assert.doesNotMatch(spec.args[5], /~\/\.zshrc|~\/\.profile|getent passwd/);
+  assert.doesNotMatch(spec.args[5], /exec\s+'\/bin\/sh'\s+'-lc'/);
   assert.strictEqual(spec.cwd, "F:\\repo");
   assert.strictEqual(spec.shell, false);
 });
@@ -100,6 +125,8 @@ test("codexVersionSpawnSpec uses the same WSL shell bridge", () => {
   assert.deepStrictEqual(spec.args.slice(0, 3), ["--exec", "/bin/sh", "-lc"]);
   assert.match(spec.args[3], /codex/);
   assert.match(spec.args[3], /--version/);
+  assert.match(spec.args[3], /npx --yes @openai\/codex/);
+  assert.doesNotMatch(spec.args[3], /~\/\.zshrc|~\/\.profile|getent passwd/);
   assert.strictEqual(spec.shell, false);
 });
 
