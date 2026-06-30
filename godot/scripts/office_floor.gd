@@ -67,6 +67,7 @@ var _weather_req: HTTPRequest
 var _map_capture_busy := false
 var _map_capture_pending := false
 var _scene_booted := false
+var _perf_mode := "high"
 
 func wallpaper_active_fps() -> int:
 	# Windows desktop embedding currently has no reliable occlusion monitor in the
@@ -78,6 +79,35 @@ func wallpaper_hidden_fps() -> int:
 
 func set_wallpaper_visible(on: bool) -> void:
 	Engine.max_fps = wallpaper_active_fps() if on else wallpaper_hidden_fps()
+
+func _read_perf_mode() -> String:
+	var m := OS.get_environment("BAGIDEA_PERF_MODE").strip_edges().to_lower()
+	if m in ["medium", "low"]:
+		return m
+	return "high"
+
+func _apply_performance_mode() -> void:
+	if _perf_mode == "high":
+		return
+	var env: Environment = $WorldEnvironment.environment
+	if _perf_mode == "medium":
+		Engine.max_fps = 30
+		get_viewport().scaling_3d_scale = 0.82
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		env.ssao_enabled = false
+		env.ssr_enabled = false
+		env.ssr_max_steps = 12
+		env.volumetric_fog_enabled = false
+		RenderingServer.directional_shadow_atlas_set_size(2048, true)
+	elif _perf_mode == "low":
+		Engine.max_fps = 15
+		get_viewport().scaling_3d_scale = 0.62
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		env.ssao_enabled = false
+		env.ssr_enabled = false
+		env.ssr_max_steps = 8
+		env.volumetric_fog_enabled = false
+		RenderingServer.directional_shadow_atlas_set_size(1024, true)
 
 func _disable_camera_blur() -> void:
 	var cam := get_node_or_null("CameraRig/Camera3D") as Camera3D
@@ -293,6 +323,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _ready() -> void:
 	_wallpaper_mode = "--wallpaper" in OS.get_cmdline_user_args()
 	_office_window_mode = "--office-window" in OS.get_cmdline_user_args()
+	_perf_mode = _read_perf_mode()
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--hour="):
 			_hour_override = float(arg.split("=")[1])
@@ -353,6 +384,7 @@ func _ready() -> void:
 		var cam: Camera3D = $CameraRig/Camera3D
 		cam.attributes.dof_blur_far_enabled = false
 		cam.attributes.dof_blur_near_enabled = false
+	_apply_performance_mode()
 
 ## 🎨 Switch this instance into the standalone 3D Office Editor.
 ## Boots EXACTLY like the main app: the window stays transparent/borderless while

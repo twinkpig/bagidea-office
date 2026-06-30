@@ -29,7 +29,7 @@ use tao::{
     window::{Icon, Window, WindowBuilder},
 };
 use tray_icon::{
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     TrayIconBuilder, TrayIconEvent,
 };
 
@@ -254,13 +254,94 @@ fn spawn_daemon(root: &PathBuf) -> Option<Child> {
     hidden(&mut c).spawn().ok()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OfficeMode {
+    Window,
+    Wallpaper,
+}
+
+impl OfficeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            OfficeMode::Window => "window",
+            OfficeMode::Wallpaper => "wallpaper",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "wallpaper" => OfficeMode::Wallpaper,
+            _ => OfficeMode::Window,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PerfMode {
+    High,
+    Medium,
+    Low,
+}
+
+impl PerfMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            PerfMode::High => "high",
+            PerfMode::Medium => "medium",
+            PerfMode::Low => "low",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "medium" => PerfMode::Medium,
+            "low" => PerfMode::Low,
+            _ => PerfMode::High,
+        }
+    }
+}
+
+fn office_mode_path(root: &PathBuf) -> PathBuf {
+    root.join("daemon").join("office-mode.txt")
+}
+
+fn perf_mode_path(root: &PathBuf) -> PathBuf {
+    root.join("daemon").join("perf-mode.txt")
+}
+
+fn load_office_mode(root: &PathBuf) -> OfficeMode {
+    std::fs::read_to_string(office_mode_path(root))
+        .ok()
+        .map(|s| OfficeMode::from_str(&s))
+        .unwrap_or(OfficeMode::Window)
+}
+
+fn save_office_mode(root: &PathBuf, mode: OfficeMode) {
+    let _ = std::fs::write(office_mode_path(root), mode.as_str());
+}
+
+fn load_perf_mode(root: &PathBuf) -> PerfMode {
+    std::fs::read_to_string(perf_mode_path(root))
+        .ok()
+        .map(|s| PerfMode::from_str(&s))
+        .unwrap_or(PerfMode::High)
+}
+
+fn save_perf_mode(root: &PathBuf, mode: PerfMode) {
+    let _ = std::fs::write(perf_mode_path(root), mode.as_str());
+}
+
 fn spawn_office(root: &PathBuf, cx: i32, cy: i32) -> Option<Child> {
     let godot = platform::godot_exe(root);
     if !std::path::Path::new(&godot).exists() {
         return None; // overlay-only mode
     }
+    platform::kill_stale_wallpaper_processes(root, &godot);
     let mut c = Command::new(godot);
-    platform::office_args(&mut c, root, cx, cy);
+    let office_mode = load_office_mode(root);
+    let perf_mode = load_perf_mode(root);
+    c.env("BAGIDEA_PERF_MODE", perf_mode.as_str());
+    platform::office_args(&mut c, root, cx, cy, office_mode);
     hidden(&mut c).spawn().ok()
 }
 
@@ -361,48 +442,6 @@ fn post_restart() {
     let _ = hidden(&mut c).spawn();
 }
 
-/// Ask the daemon to run the visible updater. This is manual and still works
-/// when background update checks are disabled.
-fn post_update() {
-    let mut c = Command::new("curl");
-    c.args([
-        "-s",
-        "-X",
-        "POST",
-        "http://127.0.0.1:8787/update",
-        "-H",
-        "x-bagidea-ui: 1",
-    ]);
-    let _ = hidden(&mut c).spawn();
-}
-
-/// Toggle background update checks in the daemon registry.
-fn post_update_checks(enabled: bool) {
-    let mut c = Command::new("curl");
-    c.args([
-        "-s",
-        "-X",
-        "POST",
-        "http://127.0.0.1:8787/registry/updatechecks",
-        "-H",
-        "content-type: application/json",
-        "-d",
-        &format!("{{\"enabled\":{}}}", enabled),
-    ]);
-    let _ = hidden(&mut c).spawn();
-}
-
-fn update_checks_enabled() -> bool {
-    let mut c = Command::new("curl");
-    c.args(["-s", "http://127.0.0.1:8787/version"]);
-    match hidden(&mut c).output() {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).contains("\"updateChecks\":true")
-        }
-        _ => false,
-    }
-}
-
 /// Debug beacon: stages of the hotkey chain reported to the daemon.
 fn ptt_beacon(stage: &str) {
     let body = format!(r#"{{"type":"ui.ptt","stage":"{}"}}"#, stage);
@@ -459,7 +498,7 @@ mod platform {
         ShowWindow, SystemParametersInfoW, GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA, SMTO_NORMAL,
         SPI_SETDESKWALLPAPER, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         SWP_NOZORDER, SW_HIDE, SW_SHOW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_POPUP,
+        WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
     static PTT_THREAD_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -553,15 +592,53 @@ mod platform {
             .unwrap_or_else(|_| r"E:\Tools\Godot\Godot_v4.6.3-stable_win64.exe".into())
     }
 
-    pub fn office_args(c: &mut Command, root: &PathBuf, cx: i32, cy: i32) {
-        // Born 64px DEAD CENTER — under the shell's circular splash, so the
-        // loading window hides behind the logo. office_floor.gd grows it.
+    pub fn office_args(
+        c: &mut Command,
+        root: &PathBuf,
+        cx: i32,
+        cy: i32,
+        mode: super::OfficeMode,
+    ) {
         c.args(["--path"])
             .arg(root.join("godot"))
             .args(["--resolution", "64x64"])
             .arg("--position")
-            .arg(format!("{},{}", cx - 32, cy - 32))
-            .args(["--", "--wallpaper"]);
+            .arg(format!("{},{}", cx - 32, cy - 32));
+        match mode {
+            super::OfficeMode::Window => {
+                c.args(["--", "--office-window"]);
+            }
+            super::OfficeMode::Wallpaper => {
+                c.args(["--", "--wallpaper"]);
+            }
+        }
+    }
+
+    pub fn kill_stale_wallpaper_processes(root: &PathBuf, godot: &str) {
+        let script = format!(
+            "$exe = '{}'; \
+             $mine = Get-CimInstance Win32_Process | Where-Object {{ \
+               $_.ExecutablePath -eq $exe -and ($_.CommandLine -match '--wallpaper' -or $_.CommandLine -match '--office-window') \
+             }}; \
+             foreach ($p in $mine) {{ Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }}; \
+             $mine | ForEach-Object {{ $_.ProcessId }}",
+            godot.replace('\'', "''")
+        );
+        let out = Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .output();
+        let Ok(out) = out else {
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
+            let _ = std::fs::write(
+                root.join("daemon").join("wallpaper-attach.log"),
+                format!("stale wallpaper cleanup\nstdout:\n{}\nstderr:\n{}\n", stdout, stderr),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(800));
     }
 
     pub fn ensure_single_instance() -> bool {
@@ -790,21 +867,33 @@ mod platform {
             if !WALLPAPER_HIDDEN.load(std::sync::atomic::Ordering::SeqCst) {
                 ShowWindow(godot, SW_SHOW);
             }
-            SetWindowPos(
-                godot,
-                1 as HWND,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE,
-            );
             let count = enum_monitors().len().max(1);
             let _ = std::fs::write(root.join("daemon").join("monitors.txt"), count.to_string());
             super::post_monitor_count(count);
             if count > 1 {
                 position_wallpaper(godot, root);
             }
+        }
+    }
+
+    fn force_opaque_child_window(godot: HWND) {
+        unsafe {
+            let ex = GetWindowLongW(godot, GWL_EXSTYLE) as u32;
+            SetWindowLongW(
+                godot,
+                GWL_EXSTYLE,
+                (ex & !(WS_EX_LAYERED | WS_EX_TRANSPARENT)) as i32,
+            );
+            SetLayeredWindowAttributes(godot, 0, 255, LWA_ALPHA);
+            SetWindowPos(
+                godot,
+                0 as HWND,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -977,26 +1066,100 @@ mod platform {
         proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     ) {
         std::thread::spawn(move || unsafe {
+            let mut find = FindByPid {
+                pid,
+                hwnd: 0 as HWND,
+            };
+            for _ in 0..240 {
+                EnumWindows(Some(find_by_pid_cb), &mut find as *mut FindByPid as _);
+                if find.hwnd != 0 as HWND {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let godot = find.hwnd;
+            if godot == 0 as HWND {
+                let _ = std::fs::write(
+                    root.join("daemon").join("wallpaper-attach.log"),
+                    format!("failed to find initial Godot hwnd pid={}\n", pid),
+                );
+                return;
+            }
+            SetWindowRgn(godot as _, CreateRectRgn(0, 0, 0, 0), 1);
+            ShowWindow(godot, SW_HIDE);
+            let ex = GetWindowLongW(godot, GWL_EXSTYLE) as u32;
+            SetWindowLongW(godot, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) as i32);
+            ShowWindow(godot, SW_SHOW);
+
             let started = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
             let flag = std::env::temp_dir().join("bagidea_world_ready");
+            let mut ready = false;
             for _ in 0..120 {
                 let fresh = std::fs::metadata(&flag)
                     .and_then(|m| m.modified())
                     .map(|t| t >= started)
                     .unwrap_or(false);
                 if fresh {
+                    ready = true;
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            let godot = find_godot_window(pid);
-            if godot != 0 as HWND {
+            if ready {
+                std::thread::sleep(std::time::Duration::from_millis(400));
                 SetWindowRgn(godot as _, 0 as _, 1);
-                pin_wallpaper_window(godot, &root);
-                spawn_wallpaper_repin_watcher(pid, root.clone());
+                let parent = desktop_parent_hwnd();
+                let mut actual_parent = 0 as HWND;
+                if parent != 0 as HWND {
+                    let style = GetWindowLongW(godot, GWL_STYLE) as u32;
+                    SetWindowLongW(godot, GWL_STYLE, ((style | WS_CHILD) & !WS_POPUP) as i32);
+                    force_opaque_child_window(godot);
+                    SetWindowPos(
+                        godot,
+                        0 as HWND,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                    );
+                    SetParent(godot, parent);
+                    actual_parent = GetParent(godot);
+                    if !WALLPAPER_HIDDEN.load(std::sync::atomic::Ordering::SeqCst) {
+                        ShowWindow(godot, SW_SHOW);
+                    }
+                    let count = enum_monitors().len().max(1);
+                    let _ =
+                        std::fs::write(root.join("daemon").join("monitors.txt"), count.to_string());
+                    super::post_monitor_count(count);
+                    if count > 1 {
+                        position_wallpaper(godot, &root);
+                    }
+                    spawn_wallpaper_repin_watcher(pid, root.clone());
+                }
+                let _ = std::fs::write(
+                    root.join("daemon").join("wallpaper-attach.log"),
+                    format!(
+                        "attached pid={} hwnd={:?} ready={} target_parent={:?} actual_parent={:?}\n",
+                        pid,
+                        godot,
+                        ready,
+                        parent,
+                        actual_parent
+                    ),
+                );
+                let _ = proxy.send_event(UserEvent::WorldReady);
+            } else {
+                let _ = std::fs::write(
+                    root.join("daemon").join("wallpaper-attach.log"),
+                    format!(
+                        "failed to attach pid={} ready={} flag={}\n",
+                        pid,
+                        ready,
+                        flag.display()
+                    ),
+                );
             }
-            let _ = proxy.send_event(UserEvent::WorldReady);
         });
     }
 
@@ -1387,7 +1550,13 @@ mod platform {
             .unwrap_or_else(|_| "/Applications/Godot.app/Contents/MacOS/Godot".into())
     }
 
-    pub fn office_args(c: &mut Command, root: &PathBuf, _cx: i32, _cy: i32) {
+    pub fn office_args(
+        c: &mut Command,
+        root: &PathBuf,
+        _cx: i32,
+        _cy: i32,
+        _mode: super::OfficeMode,
+    ) {
         // macOS uses a normal resizable office window. The desktop-level
         // wallpaper shim is intentionally not injected here; users can still
         // open the office from the tray/menu, but it behaves like the Windows
@@ -1396,6 +1565,8 @@ mod platform {
             .arg(root.join("godot"))
             .args(["--", "--office-window"]);
     }
+
+    pub fn kill_stale_wallpaper_processes(_root: &PathBuf, _godot: &str) {}
 
     pub fn ensure_single_instance() -> bool {
         let lock = std::env::temp_dir().join("bagidea_office_shell.lock");
@@ -1914,11 +2085,18 @@ mod platform {
     pub fn godot_exe(_root: &PathBuf) -> String {
         std::env::var("BAGIDEA_GODOT").unwrap_or_else(|_| "godot".into())
     }
-    pub fn office_args(c: &mut Command, root: &PathBuf, _cx: i32, _cy: i32) {
+    pub fn office_args(
+        c: &mut Command,
+        root: &PathBuf,
+        _cx: i32,
+        _cy: i32,
+        _mode: super::OfficeMode,
+    ) {
         c.args(["--path"])
             .arg(root.join("godot"))
             .args(["--", "--wallpaper"]);
     }
+    pub fn kill_stale_wallpaper_processes(_root: &PathBuf, _godot: &str) {}
     pub fn ensure_single_instance() -> bool {
         true
     }
@@ -2252,7 +2430,11 @@ fn main() {
         .unwrap_or((1920, 1080));
     let mut office_child = spawn_office(&root, phys_w / 2, phys_h / 2 - 30);
     if let Some(child) = office_child.as_ref() {
-        platform::attach_wallpaper_when_ready(child.id(), root.clone(), proxy.clone());
+        if load_office_mode(&root) == OfficeMode::Wallpaper {
+            platform::attach_wallpaper_when_ready(child.id(), root.clone(), proxy.clone());
+        } else {
+            let _ = proxy.send_event(UserEvent::WorldReady);
+        }
     }
 
     let _ = std::fs::write(std::env::temp_dir().join("bagidea_shell_alive"), "1");
@@ -2281,10 +2463,42 @@ fn main() {
     let open_item = MenuItem::new("Open Office Chat", true, None);
     let office_item = MenuItem::new("Open Office Window", true, None);
     let hide_item = CheckMenuItem::new("Hide office (agents keep working)", true, false, None);
+    let initial_office_mode = load_office_mode(&root);
+    let mode_window_item = CheckMenuItem::new(
+        "Window mode",
+        true,
+        initial_office_mode == OfficeMode::Window,
+        None,
+    );
+    let mode_wallpaper_item = CheckMenuItem::new(
+        "Wallpaper mode",
+        true,
+        initial_office_mode == OfficeMode::Wallpaper,
+        None,
+    );
+    let mode_menu = Submenu::with_items(
+        "Office mode",
+        true,
+        &[&mode_window_item, &mode_wallpaper_item],
+    )
+    .expect("office mode submenu");
+    let initial_perf_mode = load_perf_mode(&root);
+    let perf_high_item = CheckMenuItem::new(
+        "High (current quality)",
+        true,
+        initial_perf_mode == PerfMode::High,
+        None,
+    );
+    let perf_medium_item =
+        CheckMenuItem::new("Medium", true, initial_perf_mode == PerfMode::Medium, None);
+    let perf_low_item = CheckMenuItem::new("Low", true, initial_perf_mode == PerfMode::Low, None);
+    let perf_menu = Submenu::with_items(
+        "Performance",
+        true,
+        &[&perf_high_item, &perf_medium_item, &perf_low_item],
+    )
+    .expect("performance submenu");
     let restart_item = MenuItem::new("Restart office", true, None);
-    let update_item = MenuItem::new("Update office now", true, None);
-    let update_checks_item =
-        CheckMenuItem::new("Check for updates", true, update_checks_enabled(), None);
     let autostart_item = CheckMenuItem::new(
         platform::AUTOSTART_LABEL,
         true,
@@ -2296,9 +2510,9 @@ fn main() {
         &open_item,
         &office_item,
         &hide_item,
+        &mode_menu,
+        &perf_menu,
         &restart_item,
-        &update_item,
-        &update_checks_item,
         &autostart_item,
         &PredefinedMenuItem::separator(),
         &exit_item,
@@ -2312,9 +2526,12 @@ fn main() {
     let open_id = open_item.id().clone();
     let office_id = office_item.id().clone();
     let hide_id = hide_item.id().clone();
+    let mode_window_id = mode_window_item.id().clone();
+    let mode_wallpaper_id = mode_wallpaper_item.id().clone();
+    let perf_high_id = perf_high_item.id().clone();
+    let perf_medium_id = perf_medium_item.id().clone();
+    let perf_low_id = perf_low_item.id().clone();
     let restart_id = restart_item.id().clone();
-    let update_id = update_item.id().clone();
-    let update_checks_id = update_checks_item.id().clone();
     let autostart_id = autostart_item.id().clone();
     let exit_id = exit_item.id().clone();
 
@@ -2535,11 +2752,15 @@ fn main() {
                     world_ready = false;
                     if let Some(child) = spawn_office(&root, phys_w / 2, phys_h / 2 - 30) {
                         office_pid = child.id();
-                        platform::attach_wallpaper_when_ready(
-                            office_pid,
-                            root.clone(),
-                            proxy.clone(),
-                        );
+                        if load_office_mode(&root) == OfficeMode::Wallpaper {
+                            platform::attach_wallpaper_when_ready(
+                                office_pid,
+                                root.clone(),
+                                proxy.clone(),
+                            );
+                        } else {
+                            let _ = proxy.send_event(UserEvent::WorldReady);
+                        }
                         office_child = Some(child);
                         let _ = hide_item.set_checked(false);
                         vis_on = true;
@@ -2558,13 +2779,73 @@ fn main() {
                 }
                 vis_on = !hidden;
                 post_visibility(!hidden);
+            } else if ev.id == mode_window_id || ev.id == mode_wallpaper_id {
+                let mode = if ev.id == mode_wallpaper_id {
+                    OfficeMode::Wallpaper
+                } else {
+                    OfficeMode::Window
+                };
+                save_office_mode(&root, mode);
+                let _ = mode_window_item.set_checked(mode == OfficeMode::Window);
+                let _ = mode_wallpaper_item.set_checked(mode == OfficeMode::Wallpaper);
+                if let Some(c) = office_child.as_mut() {
+                    let _ = c.kill();
+                }
+                office_child = None;
+                office_pid = 0;
+                splash.set_visible(true);
+                splash.set_always_on_top(true);
+                world_ready = false;
+                if let Some(child) = spawn_office(&root, phys_w / 2, phys_h / 2 - 30) {
+                    office_pid = child.id();
+                    if mode == OfficeMode::Wallpaper {
+                        platform::attach_wallpaper_when_ready(
+                            office_pid,
+                            root.clone(),
+                            proxy.clone(),
+                        );
+                    } else {
+                        let _ = proxy.send_event(UserEvent::WorldReady);
+                    }
+                    office_child = Some(child);
+                }
+            } else if ev.id == perf_high_id || ev.id == perf_medium_id || ev.id == perf_low_id {
+                let mode = if ev.id == perf_low_id {
+                    PerfMode::Low
+                } else if ev.id == perf_medium_id {
+                    PerfMode::Medium
+                } else {
+                    PerfMode::High
+                };
+                save_perf_mode(&root, mode);
+                let _ = perf_high_item.set_checked(mode == PerfMode::High);
+                let _ = perf_medium_item.set_checked(mode == PerfMode::Medium);
+                let _ = perf_low_item.set_checked(mode == PerfMode::Low);
+                if let Some(c) = office_child.as_mut() {
+                    let _ = c.kill();
+                }
+                office_child = None;
+                office_pid = 0;
+                splash.set_visible(true);
+                splash.set_always_on_top(true);
+                world_ready = false;
+                let office_mode = load_office_mode(&root);
+                if let Some(child) = spawn_office(&root, phys_w / 2, phys_h / 2 - 30) {
+                    office_pid = child.id();
+                    if office_mode == OfficeMode::Wallpaper {
+                        platform::attach_wallpaper_when_ready(
+                            office_pid,
+                            root.clone(),
+                            proxy.clone(),
+                        );
+                    } else {
+                        let _ = proxy.send_event(UserEvent::WorldReady);
+                    }
+                    office_child = Some(child);
+                }
             } else if ev.id == restart_id {
                 // The daemon does a detached relaunch that outlives us being killed.
                 post_restart();
-            } else if ev.id == update_id {
-                post_update();
-            } else if ev.id == update_checks_id {
-                post_update_checks(update_checks_item.is_checked());
             } else if ev.id == autostart_id {
                 platform::set_autostart(autostart_item.is_checked());
             }
