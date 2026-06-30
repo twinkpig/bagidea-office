@@ -22,6 +22,7 @@ godot/bin-mac/
 .codegraph/
 daemon/.wsl-launch/
 daemon/journal.jsonl
+daemon/*.bak
 daemon/registry.json
 daemon/sessions.json
 daemon/paused.json
@@ -33,6 +34,7 @@ daemon/calendar.json
 daemon/projects.json
 daemon/monitor.txt
 daemon/monitors.txt
+daemon/monitor-debug.log
 daemon/proposals.json
 
 # Adapter session workspace (keep only the permission-hook config)
@@ -40,6 +42,13 @@ workspace/*
 !workspace/.claude/
 workspace/.claude/*
 !workspace/.claude/settings.json
+
+# uploads/ is a runtime drop box for chat media (CEO images, screenshots, gen
+# art) — keep the dir itself tracked via a sentinel so it exists after a fresh
+# clone, but do NOT track the media files that land in it at runtime.
+!workspace/uploads/
+workspace/uploads/*
+!workspace/uploads/.gitkeep
 
 # Free art packs (free-license / CC0 — see README "Art assets") now ship IN the
 # repo, so a fresh install and `bagidea update` carry the full visuals + sounds.
@@ -91,3 +100,17 @@ bin/
 godot/bagidea_editor_ready
 godot/bagidea_world_ready
 daemon/registry.json.bak*
+
+# ── Secrets & key material — NEVER commit ──────────────────────────────
+.env*
+*.key
+keystore*
+*.pem
+*.p12
+*.pfx
+*privkey*
+*private-key*
+*seed*.txt
+mnemonic*.txt
+credentials.json
+secrets.json

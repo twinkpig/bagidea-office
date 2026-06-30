@@ -4,6 +4,202 @@ All notable changes to BagIdea Office. A **release** is a deliberate `VERSION`
 bump on `main` (see [RELEASING.md](RELEASING.md)) — that's what triggers the
 in-app 🔄 update banner. Versions follow [semver](https://semver.org).
 
+## [0.9.34] — Linux chat restored + clean child-process shutdown
+
+**Fixed**
+- **Linux: opening the chat works again.** The v0.9.31 visibility fix turned out to break Open on
+  X11 — `set_visible(true)` doesn't actually re-map the overlay on some window managers, so clicking
+  Open (or the orb) did nothing and chat was unreachable. Reverted to the mapped/off-screen approach:
+  the chat opens and closes as before. The blank grey panel returns as a side effect (cosmetic); a
+  proper "no grey window" fix (creating the overlay on demand) is being worked on with the reporter.
+  Thanks to **[@nookpp](https://github.com/nookpp)** for the decisive diagnostic (#28).
+- **No more orphan processes when the shell exits.** A crash, `kill`, or `launchctl unload` used to
+  leave the Node daemon holding port 8787 and Godot running in the background. The shell now traps
+  SIGTERM/SIGINT and kills its children before exiting, and the daemon self-shuts when its parent
+  shell is gone. Thanks to **[@misternay](https://github.com/misternay)** (#34, closes #33).
+
+---
+Shell (Rust) changes — prebuilt binaries rebuild for all platforms via CI.
+
+## [0.9.33] — Resilient brains, correct context windows, richer meetings
+
+**Fixed**
+- **A dead or misconfigured brain no longer hangs the office for ~2 minutes.** When a non-Claude
+  backend (GLM / DeepSeek / Kimi …) can't answer — bad/expired key (401/403) or an unreachable
+  endpoint — the office now detects it within seconds and tells you plainly which brain failed and
+  why, instead of waiting for ~10 silent retries that ended in a raw error.
+- **Correct context windows for every model** — so auto-compact fires at the right moment instead
+  of too often. GLM-5.2 in particular was falling back to a stale 128k value, so threads on it
+  compacted far too frequently and could drop context; it now reports its real 200k (or the full
+  1M with the `glm-5.2[1m]` model id). The GLM provider floor and compaction budget were raised to
+  match, and each model compacts at ~80% of its own window. *(Want GLM-5.2's full 1M? pick
+  `glm-5.2[1m]` in that agent's 🧠 brain field.)*
+
+**Added**
+- **Auto-failover to Claude.** When a non-Claude brain dies mid-task, the office automatically
+  re-runs that task once on Claude (the always-present default brain) and tells you it fell over —
+  so a flaky third-party brain never blocks you. Bounded (never loops), owner-visible on every
+  switch, and disable-able via the registry (`brainFailover: false`).
+- **Structured, interactive meetings with durable action items** — phases (open → deliberate →
+  decide), the owner can speak into a live meeting, live controls (pause / resume / end), and
+  action items that persist as validated, assignable records instead of dying with the transcript.
+  Thanks to **[@misternay](https://github.com/misternay)** (#32, closes #31).
+
+**Security**
+- The live-meeting owner routes (`/discuss/message`, `/discuss/control`) are now restricted to the
+  in-app editor, so an agent can't forge a CEO line into a meeting or silently end one — consistent
+  with the v0.9.32 hardening.
+
+## [0.9.32] — Agents stay on the brain you gave them
+
+**Fixed**
+- **An agent can no longer change which model it (or anyone) runs on.** The endpoints that set
+  an agent's brain (provider/model), create or remove agents, and store provider credentials
+  weren't restricted to the in-app editor — so a teammate with shell access, when asked to "pick
+  the right model," could reassign models itself instead of delegating. They're now owner-only
+  (the 🧠 editor), like every other roster and credential setting. Each teammate runs strictly on
+  the brain you assigned it, and the Director keeps its own.
+
+**Changed**
+- **The Director routes by brain instead of switching models.** Its operating brief now says it
+  plainly — every teammate has a fixed brain you chose, so putting "the right model" on a task
+  means handing it to the teammate who already has that brain, never changing models — and the
+  team roster it works from now shows each member's brain (🧠) so it can match a task to the right
+  one at a glance.
+
+## [0.9.31] — Cross-platform project folders + Linux lifecycle fixes
+
+**Added**
+- **Native folder picker on every platform.** The PROJECTS tab's 📂 browse button now opens
+  your OS's real folder chooser — `choose folder` on macOS, the Windows folder dialog, and
+  `zenity` on Linux (falling back to the built-in picker when `zenity` isn't installed). The
+  path separator and platform are now reported by the daemon instead of the deprecated
+  `navigator.platform`. Thanks to **[@misternay](https://github.com/misternay)** (#30, closes #29).
+
+**Fixed**
+- **macOS project terminals.** Opening a project on macOS now reliably tags its Terminal window
+  (previously a race when Terminal was busy) and no longer breaks on folder titles that contain
+  quotes or backslashes.
+- **Linux: no more orphaned daemon.** Closing the office on Linux could leave `daemon/server.js`
+  running and holding port 8787. The Linux launcher no longer starts the daemon separately — the
+  shell owns the whole stack (daemon + Godot) and shuts it down on quit, like the other launch
+  paths already did. Reported by **[@nookpp](https://github.com/nookpp)** (#28).
+- **Linux/X11: the stray blank grey window is gone.** The chat overlay hid itself by parking
+  off-screen — which X11 window managers clamp back onto the desktop as a blank fixed-size panel.
+  On Linux the overlay now hides for real. (#28)
+
+## [0.9.30] — Media from anywhere, baseline skills for everyone, no more scroll jumps
+
+**Fixed**
+- **Tasks / Calendar / Notes stop jumping to the top.** Pinning a row, approving or rejecting
+  a proposal, or editing a job/event/note in OFFICE OPS re-rendered the whole panel and snapped
+  the scrollbar back to the top every time. Each of those tabs now keeps its scroll position
+  across those actions (and across the live job refresh), the same way the project list already did.
+
+**Changed**
+- **Chat shows media from anywhere on your disk.** Images, video and audio rendered inline only
+  when the file lived under the workspace or a registered project — anything on the Desktop, in
+  Downloads, or on another drive fell back to a bare path link, so the team copied files in just
+  to show them. Now an absolute media path previews inline wherever it lives, and the row's open/
+  reveal actions follow. Only media files are ever served this way (never source, `.env`, keys or
+  other files) and the office still listens only on your own machine.
+- **Every agent starts with three baseline skills.** New and existing teammates now carry
+  **archive-search** (recall what the office already knows before guessing), the **file & media
+  toolkit** (reach for the bundled tools instead of "I can't"), and **doc-writer** (clean,
+  skimmable deliverables) without having to be assigned them — the shared competence a teammate
+  should just have. Specialist skills, and tool-granting ones like web automation, stay opt-in.
+- **Agents put their tools to visible use when it helps.** Quiet background work stays the default,
+  but when seeing something live makes it clearer — or you ask — an agent will open the real
+  browser to walk you through a web build, or produce an artifact and show it in chat, instead of
+  only describing what it could do.
+
+**Security**
+- Hardened `.gitignore` so key material, `.env` files, keystores and `*.bak` runtime logs can't be
+  committed by accident.
+
+## [0.9.29] — Uninstall/update any plugin; agents deploy & verify their plugin work
+
+**Fixed**
+- **Uninstall and update now work for every plugin.** A plugin whose folder name differed
+  from its manifest id (so it lived somewhere other than `plugins/<its-id>`) couldn't be
+  removed or updated — the buttons failed with "plugin not found". The office now resolves
+  a plugin by its id wherever its folder lives.
+
+**Changed**
+- **Agents finish plugin work properly by default.** When the team builds or improves a
+  plugin, they now deploy it into the running office and **verify it actually took effect**
+  (the office only runs plugins from `plugins/<id>`, so a plugin built in a project or a dev
+  copy doesn't count until it's deployed, reloaded, and confirmed at the new version) before
+  reporting it done — so a finished-looking plugin can't quietly leave the office running an
+  old version. Publishing to a git repo or the Hub stays a separate, owner-approved step.
+
+## [0.9.28] — One-click plugin updates + a default plugin icon
+
+**Added**
+- **Update a plugin in one click.** Open the 🧩 Plugins panel and any plugin you installed
+  from the Hub that has a newer version now shows an **⬆ update** button — click it and the
+  office pulls the latest and reloads it live. The check is read-only (it just compares your
+  copy to the plugin's repo), and it only ever touches plugins you installed from the Hub:
+  a plugin repo you're developing yourself is never auto-updated, and one with uncommitted
+  changes is left alone — so an update can't throw away your own work.
+
+**Fixed**
+- **Plugins without an emoji get a default 🧩 icon.** A plugin whose name didn't start with
+  an emoji used to render with a blank icon slot in the Plugins panel; it now falls back to
+  🧩 so no row looks empty. (Plugin authors: the leading emoji in your manifest `name` is your
+  icon — see the plugins guide.)
+
+> The Plugins, Tools, and Showcase pages on the website also gained a **search box** this
+> cycle (already live).
+
+## [0.9.27] — A full team always shows up; tidier mini header; smarter persona drafts
+
+**Fixed**
+- **All your agents show up when the team is full.** Once the office had a full roster,
+  the wallpaper could show **only the CEO** — everyone else was missing (though they still
+  chatted and worked). The team roster the daemon sends had outgrown the wallpaper's 64 KB
+  WebSocket buffer, so the whole message was dropped and the world never learned who was on
+  the team. The buffer is now 1 MB — a full 18-agent office fits with room to spare.
+- **Mini window keeps its "BAGIDEA OFFICE" wordmark.** The previous build hid it to protect
+  the window buttons on a narrow window; it now stays and simply shrinks (with an `…`) when
+  space is tight, so the buttons are still safe but the header no longer looks empty.
+
+**Changed**
+- **The ✨ persona copilot drafts with the Director's brain.** When you ask it to draft a new
+  agent from a one-line brief, it now uses your Director (main agent)'s configured model —
+  predictable, and it works for an office running entirely on a non-Claude provider.
+
+## [0.9.26] — Multi-monitor: the wallpaper can't vanish off a second screen
+
+**Fixed** (reported on Facebook 🙏)
+- **Two+ monitors: the wallpaper no longer flashes and disappears.** On some
+  multi-monitor setups the desktop's wallpaper layer (WorkerW) only really covers the
+  **primary** screen, so moving the office onto a secondary monitor put it off-canvas and
+  Windows clipped it away — it appeared for a moment, then vanished. The shell now measures
+  that layer and, if the chosen monitor isn't reachable through it, keeps the wallpaper on
+  the primary screen (where it's always visible) instead of moving it somewhere it can't be
+  seen. The single-monitor path is unchanged. If you hit a multi-monitor placement issue,
+  send us `daemon/monitor-debug.log` — the office now records exactly what it detected.
+
+## [0.9.25] — Live chat status + in-chat permissions, meeting brain-routing fix
+
+**Added** (community PRs 🙌 — thanks [@misternay](https://github.com/misternay))
+- **Live status in the chat** while an agent works — a typing/▶ bubble shows what it's
+  doing right now instead of a silent wait ([#18](https://github.com/bagidea/bagidea-office/pull/18)).
+- **Approve permissions right in the chat.** When an agent needs to run a tool, the request
+  now appears as an inline card you approve or reject without leaving the conversation
+  ([#18](https://github.com/bagidea/bagidea-office/pull/18)).
+
+**Fixed**
+- **Meetings & reflection now use each agent's own brain.** When an agent was set to a
+  non-Claude provider, group meetings and idle reflection still hit Claude's endpoint and
+  failed with a **401** for users running only a proxy / GLM / DeepSeek key. Each agent's
+  configured provider is now routed everywhere ([#22](https://github.com/bagidea/bagidea-office/pull/22)).
+- **Windows 10: the mini-window restore button no longer clips.** In the narrow mini window
+  the logo + "BAGIDEA OFFICE" wordmark + buttons overflowed and the restore button was only
+  half visible. The wordmark is now hidden in mini (the logo icon is enough), so the control
+  cluster always fits flush-right and fully shows (reported on Discord 🙏).
+
 ## [0.9.24] — Windows 10 mini/restore button + tidier mini header
 
 **Fixed** (reported on Discord 🙏)

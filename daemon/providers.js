@@ -32,7 +32,9 @@ const PROVIDERS = {
     label: "GLM · Z.AI", format: "anthropic", direct: true,
     baseUrl: "https://api.z.ai/api/anthropic",          // confirmed (Z.AI docs)
     modelsUrl: "https://api.z.ai/api/paas/v4/models",   // OpenAI-compatible model list
-    models: ["glm-4.6", "glm-4.5"],                     // hint only — live list is fetched on Connect
+    // GLM-5.2's full 1M context is unlocked ONLY by the "glm-5.2[1m]" id — plain
+    // "glm-5.2" serves ~200k. List the [1m] variant first so the picker favors it.
+    models: ["glm-5.2[1m]", "glm-5.2", "glm-4.6", "glm-4.5"],  // hint only — live list fetched on Connect
   },
   deepseek: {
     label: "DeepSeek", format: "anthropic", direct: true,

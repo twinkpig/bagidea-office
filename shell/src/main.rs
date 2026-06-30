@@ -18,6 +18,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // Flipped true the moment the user quits from the tray, so the daemon watchdog
 // stops resurrecting the daemon we're deliberately tearing down.
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+// Flipped true by a Unix signal handler (SIGTERM/SIGINT) so the event loop
+// picks up the shutdown on its next tick — same cleanup path as tray Exit.
+static SIGNAL_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 use tao::{
     dpi::{LogicalPosition, LogicalSize},
@@ -224,6 +227,11 @@ fn spawn_daemon(root: &PathBuf) -> Option<Child> {
     }
     let mut c = Command::new("node");
     c.arg(root.join("daemon").join("server.js"));
+    // Mark the daemon as shell-spawned so it enables parent-death detection
+    // (polls our PID and self-shuts-down if we crash/exit, instead of going
+    // orphan on PID 1 and holding port 8787 forever). A manual `node server.js`
+    // from a terminal won't have this env var, so it won't false-positive.
+    c.env("OEP_SPAWNED", "1");
     // A release GUI shell has NO console (windows_subsystem="windows"), so an
     // INHERITED stdout/stderr is an invalid handle and node can crash on its
     // first write — taking the daemon down seconds after launch. Send the
@@ -885,10 +893,12 @@ mod platform {
 
     fn position_wallpaper(godot: HWND, root: &std::path::Path) {
         unsafe {
+            use windows_sys::Win32::Foundation::RECT;
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                GetSystemMetrics, MoveWindow, SM_CXSCREEN, SM_CYSCREEN, SM_XVIRTUALSCREEN,
-                SM_YVIRTUALSCREEN,
+                GetClientRect, GetSystemMetrics, MoveWindow, SM_CXSCREEN, SM_CXVIRTUALSCREEN,
+                SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
             };
+            let workerw = desktop_parent_hwnd();
             let mons = enum_monitors();
             // Chosen monitor: daemon/monitor.txt (set from the in-app picker) wins,
             // then the BAGIDEA_MONITOR env, else 0 (primary). Plain int — no JSON dep.
@@ -903,24 +913,67 @@ mod platform {
                 .unwrap_or(0);
             let vsx = GetSystemMetrics(SM_XVIRTUALSCREEN);
             let vsy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            let (left, top, w, h) = mons
+            let vcx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            let vcy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            // The monitor the user picked, and the primary (index 0) we fall back to.
+            let chosen = mons
                 .get(idx)
                 .or_else(|| mons.first())
-                .map(|&(l, t, w, h, _)| (l, t, w, h))
-                .unwrap_or((
-                    0,
-                    0,
-                    GetSystemMetrics(SM_CXSCREEN),
-                    GetSystemMetrics(SM_CYSCREEN),
-                ));
-            // WorkerW client origin = virtual-screen origin → subtract it.
-            MoveWindow(godot, left - vsx, top - vsy, w, h, 1);
+                .copied()
+                .unwrap_or((0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), true));
+            let primary = mons.first().copied().unwrap_or(chosen);
+
+            // WorkerW normally spans the virtual desktop, but some setups expose
+            // only the primary monitor. If the chosen monitor would be mostly
+            // clipped, fall back to primary rather than making the wallpaper vanish.
+            let mut wc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            let have_wc = workerw != 0 as HWND && GetClientRect(workerw, &mut wc) != 0;
+            let wcw = (wc.right - wc.left).max(0);
+            let wch = (wc.bottom - wc.top).max(0);
+
+            let (tx, ty, tw, th) = (chosen.0 - vsx, chosen.1 - vsy, chosen.2, chosen.3);
+            let (mut fx, mut fy, mut fw, mut fh) = (tx, ty, tw, th);
+            let mut fallback = false;
+            if have_wc && wcw > 0 && wch > 0 {
+                let vis = ((tx + tw).min(wcw) - tx.max(0)).max(0) as i64
+                    * ((ty + th).min(wch) - ty.max(0)).max(0) as i64;
+                let area = (tw.max(1) as i64) * (th.max(1) as i64);
+                if vis * 2 < area {
+                    fx = primary.0 - vsx;
+                    fy = primary.1 - vsy;
+                    fw = primary.2;
+                    fh = primary.3;
+                    fallback = true;
+                }
+            }
+            if fw <= 0 || fh <= 0 {
+                fx = 0;
+                fy = 0;
+                fw = GetSystemMetrics(SM_CXSCREEN);
+                fh = GetSystemMetrics(SM_CYSCREEN);
+                fallback = true;
+            }
+
+            let mut log = String::from("=== BagIdea Office — wallpaper placement (multi-monitor) ===\n");
+            log.push_str(&format!("monitors: {} (index 0 = primary)\n", mons.len()));
+            for (i, m) in mons.iter().enumerate() {
+                log.push_str(&format!(
+                    "  [{}] left={} top={} w={} h={} primary={}\n", i, m.0, m.1, m.2, m.3, m.4));
+            }
+            log.push_str(&format!("chosen index (monitor.txt): {}\n", idx));
+            log.push_str(&format!("virtual screen: origin=({},{}) size={}x{}\n", vsx, vsy, vcx, vcy));
+            log.push_str(&format!("WorkerW client: have={} size={}x{}\n", have_wc, wcw, wch));
+            log.push_str(&format!("target  (WorkerW coords): x={} y={} w={} h={}\n", tx, ty, tw, th));
+            log.push_str(&format!("applied (WorkerW coords): x={} y={} w={} h={} fallback_to_primary={}\n", fx, fy, fw, fh, fallback));
+            let _ = std::fs::write(root.join("daemon").join("monitor-debug.log"), log);
+
+            MoveWindow(godot, fx, fy, fw, fh, 1);
         }
     }
 
     pub fn attach_wallpaper_when_ready(
-        _pid: u32,
-        _root: PathBuf,
+        pid: u32,
+        root: PathBuf,
         proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     ) {
         std::thread::spawn(move || unsafe {
@@ -935,6 +988,13 @@ mod platform {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let godot = find_godot_window(pid);
+            if godot != 0 as HWND {
+                SetWindowRgn(godot as _, 0 as _, 1);
+                pin_wallpaper_window(godot, &root);
+                spawn_wallpaper_repin_watcher(pid, root.clone());
             }
             let _ = proxy.send_event(UserEvent::WorldReady);
         });
@@ -2156,6 +2216,21 @@ fn main() {
     // Make the website's one-click install reach us (idempotent; self-heals).
     platform::register_uri_scheme();
 
+    // ---- Unix signal handlers: SIGTERM/SIGINT → clean shutdown
+    // Without this, `kill <shell-pid>` or `launchctl unload` kills the shell
+    // but leaves the node daemon and Godot as orphans on PID 1.
+    #[cfg(unix)]
+    {
+        use std::os::raw::c_int;
+        extern "C" fn handle_signal(_sig: c_int) {
+            SIGNAL_SHUTDOWN.store(true, Ordering::Relaxed);
+        }
+        unsafe {
+            libc::signal(libc::SIGTERM, handle_signal as usize);
+            libc::signal(libc::SIGINT, handle_signal as usize);
+        }
+    }
+
     use wry::WebViewBuilder;
 
     // ---- boot the whole stack
@@ -2387,11 +2462,23 @@ fn main() {
     let mut last_watch = std::time::Instant::now();
     let mut orb_drag_until = None::<std::time::Instant>;
     event_loop.run(move |event, target, control_flow| {
+        // Unix signal (SIGTERM/SIGINT) → same cleanup as tray Exit.
+        if SIGNAL_SHUTDOWN.load(Ordering::Relaxed) {
+            SHUTTING_DOWN.store(true, Ordering::Relaxed);
+            if let Some(c) = daemon_child.as_mut() {
+                let _ = c.kill();
+            }
+            if let Some(c) = office_child.as_mut() {
+                let _ = c.kill();
+            }
+            *control_flow = ControlFlow::Exit;
+            return;
+        }
+
         // A slow poll tick keeps the tray channels live without pinning a core.
         *control_flow = ControlFlow::WaitUntil(
             std::time::Instant::now() + std::time::Duration::from_millis(250),
         );
-
         // Chat-head watchdog — THROTTLED. Re-asserting window state every tick
         // pins a CPU core on macOS (each level/visibility poke wakes the loop),
         // so we only check every ~2s and only touch the window when the orb has
