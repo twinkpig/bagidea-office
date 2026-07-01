@@ -186,6 +186,18 @@
     color: #ff9aa8; margin-bottom: 3px; letter-spacing: 0.5px;
   }
   .msg.agent { align-self: flex-start; background: var(--glass); border: 1px solid rgba(255,255,255,0.07); border-bottom-left-radius: 4px; }
+  .msg.summary { align-self: stretch; max-width: 100%; border-color: rgba(94,200,255,0.34); background: rgba(94,200,255,0.08); }
+  .msgtext.collapsed { max-height: 9.8em; overflow: hidden; position: relative; }
+  .msgtext.collapsed::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.8em;
+    background: linear-gradient(to bottom, rgba(14,19,31,0), rgba(14,19,31,0.96));
+  }
+  .msg.you .msgtext.collapsed::after { background: linear-gradient(to bottom, rgba(20,65,96,0), rgba(20,65,96,0.96)); }
+  .msg.summary .msgtext.collapsed::after { background: linear-gradient(to bottom, rgba(17,42,64,0), rgba(17,42,64,0.96)); }
+  .moretext {
+    margin-top: 6px; border: 0; padding: 0; background: transparent; color: var(--accent);
+    font-size: 11px; cursor: pointer; font-weight: 700;
+  }
   .msg .who { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 600; }
   .msg .who .face { width: 20px; height: 20px; border-radius: 5px; background-color: #1c2740; }
   .chip {
@@ -853,6 +865,31 @@
     border: 1px solid rgba(255,255,255,0.12); color: var(--dim); user-select: none;
   }
   .chk.on { color: var(--accent); border-color: var(--accent); background: rgba(94,200,255,0.1); }
+  .wslcfg {
+    flex: 1 1 100%; margin-top: 7px; padding: 8px; border-radius: 8px;
+    background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.08);
+    display: grid; grid-template-columns: minmax(170px, 1fr) minmax(120px, 180px) auto;
+    gap: 8px; align-items: center;
+  }
+  .wslcfg label { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text); font-size: 12px; cursor: pointer; }
+  .wslcfg small { display: block; margin-top: 2px; color: var(--dim); font-size: 10.5px; line-height: 1.3; }
+  .wslcfg input[type="text"] {
+    width: 100%; margin: 0; font: inherit; font-size: 12px; color: var(--text);
+    background: rgba(255,255,255,0.05); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; outline: none;
+  }
+  .wslcfg input[type="text"]:focus { border-color: var(--accent); }
+  .wslcfg .winbtn { position: static; opacity: 1; transform: none; }
+  @media (max-width: 620px) { .wslcfg { grid-template-columns: 1fr auto; } .wslcfg input[type="text"] { grid-column: 1 / -1; } }
+  .meetingHistoryList { display: grid; gap: 6px; max-height: 190px; overflow: auto; padding-right: 3px; }
+  .meetingHistoryItem {
+    padding: 7px 8px; border-radius: 8px; background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08); cursor: pointer;
+  }
+  .meetingHistoryItem.on { border-color: var(--accent); background: rgba(94,200,255,0.12); }
+  .meetingHistoryItem b { display: block; font-size: 12px; color: var(--fg); margin-bottom: 3px; }
+  .meetingHistoryItem span { display: block; font-size: 10.5px; color: var(--dim); margin-bottom: 4px; }
+  .meetingHistoryItem p { margin: 0; font-size: 11.5px; color: #cbd5e1; line-height: 1.35; }
   .autobadge { font-size: 9.5px; color: #ffd28a; border: 1px solid rgba(255,210,138,0.4); border-radius: 10px; padding: 1px 7px; margin-left: 6px; }
   .switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); margin-bottom: 10px; cursor: pointer; }
   .switch .knob { width: 34px; height: 18px; border-radius: 12px; background: rgba(255,255,255,0.12); position: relative; transition: background 0.15s; }
@@ -944,6 +981,7 @@
   <div class="opt" id="workflowBtn">🔀 <span>Workflow Builder</span></div>
   <div class="opt" id="toolshubBtn">🧰 <span>Tools Hub</span></div>
   <div class="opt" id="pluginshubBtn">🧩 <span>Plugins Hub</span></div>
+  <div class="opt" id="meetingsBtn">🗣 <span>会议记录</span></div>
   <div class="opt" id="editBtn">🎨 <span>จัดออฟฟิศ</span></div>
   <div class="opt" id="discussBtn">🗣 <span>ประชุม agents</span></div>
   <div class="opt" id="mapBtn">🗺 <span>แผนที่</span></div>
@@ -1217,6 +1255,29 @@
 	    "ร่างแยกของ": { en: "clone of", zh: "分身来自", ja: "分身元" },
 	    "✓ สำเร็จ": { en: "✓ done", zh: "✓ 成功", ja: "✓ 成功" },
 	    "⏳ กำลังทำ": { en: "⏳ running", zh: "⏳ 进行中", ja: "⏳ 実行中" },
+	    "กำลัง": { en: "Doing", zh: "正在", ja: "実行中" },
+	    "กำลังใช้": { en: "Using", zh: "正在使用", ja: "使用中" },
+	    "กำลังใช้ปลั๊กอิน": { en: "Using plugin", zh: "正在使用插件", ja: "プラグイン使用中" },
+	    "ทำงานอยู่…": { en: "Working…", zh: "工作中…", ja: "作業中…" },
+	    "กำลังทำงาน…": { en: "Working…", zh: "工作中…", ja: "作業中…" },
+	    "กำลังทำ %n งาน": { en: "Running %n task(s)", zh: "正在执行 %n 个任务", ja: "%n 件実行中" },
+	    "กำลังคิดและวางแผน…": { en: "Thinking and planning…", zh: "正在思考和规划…", ja: "考え中・計画中…" },
+	    "กำลังรับคำสั่ง…": { en: "Receiving the instruction…", zh: "正在接收指令…", ja: "指示を受信中…" },
+	    "ยกเลิกงานนี้": { en: "Cancel this task", zh: "取消这个任务", ja: "このタスクをキャンセル" },
+	    "กำลังฟัง… พูดได้เลย": { en: "Listening… speak now", zh: "正在聆听… 请说", ja: "聞いています…話してください" },
+	    "⏳ กำลังถอดเสียง…": { en: "⏳ Transcribing…", zh: "⏳ 正在转写…", ja: "⏳ 文字起こし中…" },
+	    "📞 กำลังเชื่อมต่อสายสด…": { en: "📞 Connecting live call…", zh: "📞 正在连接实时通话…", ja: "📞 ライブ通話に接続中…" },
+	    "🏁 กำลังจบ…": { en: "🏁 Ending…", zh: "🏁 正在结束…", ja: "🏁 終了中…" },
+	    "🧪 กำลังเชื่อมต่อ…": { en: "🧪 Connecting…", zh: "🧪 连接中…", ja: "🧪 接続中…" },
+	    "🔴 LIVE meeting — พิมพ์เข้าวงประชุม": { en: "🔴 LIVE meeting — type into the meeting", zh: "🔴 会议直播中 — 输入内容加入会议", ja: "🔴 LIVE meeting — 会議へ入力" },
+	    "⏸ พักวงประชุม": { en: "⏸ Meeting paused", zh: "⏸ 会议已暂停", ja: "⏸ 会議を一時停止中" },
+	    "🖥 คุณเปิดทำงานอยู่": { en: "🖥 You have it open", zh: "🖥 你正在打开工作", ja: "🖥 開いて作業中" },
+	    "🫥 ของคุณทำงานเบื้องหลัง": { en: "🫥 Yours is running in the background", zh: "🫥 你的窗口在后台运行", ja: "🫥 バックグラウンドで実行中" },
+	    "กำลังทำงาน": { en: "is working", zh: "正在工作", ja: "作業中" },
+	    "⚪ ปิด — ไม่มีใครทำงาน": { en: "⚪ Closed — nobody is working", zh: "⚪ 已关闭 — 暂无人工作", ja: "⚪ 閉じています — 作業者なし" },
+	    "🔴 กำลังทำงานนี้อยู่…": { en: "🔴 Running this job…", zh: "🔴 正在执行这个任务…", ja: "🔴 このジョブを実行中…" },
+	    " · ⏸ พัก": { en: " · ⏸ Paused", zh: " · ⏸ 暂停", ja: " · ⏸ 一時停止" },
+	    " · ล่าสุด ": { en: " · latest ", zh: " · 最近 ", ja: " · 最新 " },
 	    "คุยเสียงสด (realtime)": { en: "Live voice chat (realtime)", zh: "实时语音聊天", ja: "ライブ音声チャット（realtime）" },
 	    "กด 📞 อีกครั้งเพื่อวางสาย": { en: "Press 📞 again to hang up", zh: "再次按 📞 挂断", ja: "📞 をもう一度押して終了" },
 	    "กด 📞 เพื่อวางสาย": { en: "Press 📞 to hang up", zh: "按 📞 挂断", ja: "📞 で終了" },
@@ -1267,6 +1328,191 @@
   if (LANG !== "th") loadTR();
   function tr(s) { if (LANG === "th" || !s) return s; return TR[String(s).trim()] || s; }
   const t = tr;  // back-compat for inline ${t(...)} uses
+
+  // Some settings strings are assembled dynamically (Thai fragment + provider
+  // name + status), so exact-key i18n cannot catch them. Keep a small local
+  // zh fragment dictionary for chrome text only; user/chat content is skipped
+  // by NO_I18N below.
+  const PHRASE_ZH = {
+    "ค้นหา": "搜索",
+    "เพิ่ม": "添加",
+    "ยังไม่ได้เลือก": "尚未选择",
+    "ไม่พบ": "未找到",
+    "ยังไม่ได้ตั้ง": "未设置",
+    "จะใช้ไม่ได้": "将不可用",
+    "ขอ key:": "获取 key:",
+    "ทดสอบว่า key ใช้งานได้จริง": "测试 key 是否可用",
+    "ทดสอบใหม่": "重新测试",
+    "เปลี่ยน key": "更换 key",
+    "เปลี่ยน key ใหม่": "更换新 key",
+    "วาง key ใหม่…": "粘贴新 key…",
+    "วาง key…": "粘贴 key…",
+    "วาง API key…": "粘贴 API key…",
+    "ยังไม่มี key เพิ่มเติม": "暂无附加 key",
+    "ลบ key": "删除 key",
+    "บันทึก": "保存",
+    "🧪 กำลังทดสอบ…": "🧪 测试中…",
+    "🧪 กำลังเชื่อมต่อ…": "🧪 连接中…",
+    "เชื่อมต่อไม่สำเร็จ": "连接失败",
+    "เชื่อมต่อแล้ว · ใช้ API key": "已连接 · 使用 API key",
+    "เชื่อมต่อแล้ว · ใช้ subscription login": "已连接 · 使用订阅登录",
+    "ยังไม่ได้เชื่อมต่อ — Login หรือใส่ API key": "未连接 — 登录或输入 API key",
+    "ยังไม่ได้เชื่อมต่อ — กด Connect": "未连接 — 点击 Connect",
+    "ยังไม่ได้เชื่อมต่อ": "未连接",
+    "เชื่อมต่อแล้ว": "已连接",
+    "(proxy ในตัว)": "（内置代理）",
+    "เปลี่ยนไปใช้ API key": "改用 API key",
+    "ลบ key (กลับไปใช้ subscription)": "移除 key（改回订阅）",
+    "ลบ provider": "删除 provider",
+    "ตัดการเชื่อมต่อ": "断开连接",
+    "หรือวาง API key…": "或粘贴 API key…",
+    "ใช้ API key": "使用 API key",
+    "เปิดเทอร์มินัลให้ login แล้ว — ทำตามขั้นตอนในหน้าต่างนั้น แล้วกลับมากด 🔄": "已打开终端用于登录 — 在该窗口完成步骤后回来点击 🔄",
+    "ใช้ config/login ของ": "使用",
+    "เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES": "自己的 config/login · 可在 AGENTS 页面为 agent 设置，或在 ROLES 中设模板",
+    "ต่อตรง (Anthropic-compatible)": "直连（Anthropic 兼容）",
+    "ผ่าน proxy (OpenAI-compatible)": "通过代理（OpenAI 兼容）",
+    "Local (ในเครื่อง · ฟรี · ไม่ต้องใช้ key)": "Local（本机 · 免费 · 不需要 key）",
+    "ในเครื่อง · ฟรี · ไม่ต้องใช้ key": "本机 · 免费 · 不需要 key",
+    "เปิด Ollama แล้วกด Connect": "打开 Ollama 后点击 Connect",
+    "เปิด server แล้วกด Connect": "启动 server 后点击 Connect",
+    "Custom — เพิ่ม provider เอง": "自定义 — 添加 provider",
+    "ชื่อ provider": "provider 名称",
+    "เช่น": "例如",
+    "＋ เพิ่ม + Connect": "＋ 添加 + Connect",
+    "🎤 ถอดเสียง (Whisper) · 🖼 สร้างภาพ": "🎤 语音转文字（Whisper）· 🖼 生成图片",
+    "🎤 ถอดเสียง · 🗣 เสียงพูด agents · 📞 realtime · 🖼 สร้างภาพ": "🎤 语音转文字 · 🗣 agent 语音 · 📞 实时通话 · 🖼 生成图片",
+    "สร้าง bot กับ @BotFather แล้ววาง token — ใช้ได้ทันที ไม่ต้องมี public URL": "用 @BotFather 创建 bot 后粘贴 token — 可直接使用，不需要公网 URL",
+    "Bot token จาก @BotFather": "来自 @BotFather 的 Bot token",
+    "(ไม่บังคับ) chat id ของคุณ — จำกัดให้คุยได้คนเดียว": "（可选）你的 chat id — 限定只与你对话",
+    "สร้าง bot ที่ discord.com/developers (เปิด MESSAGE CONTENT INTENT) แล้วเชิญเข้า server": "在 discord.com/developers 创建 bot（开启 MESSAGE CONTENT INTENT）并邀请进 server",
+    "(ไม่บังคับ) channel id — จำกัดห้อง": "（可选）channel id — 限定频道",
+    "Messaging API: ตั้ง webhook ชี้มาที่": "Messaging API: 设置 webhook 指向",
+    "Slack app: เปิด Event Subscriptions แล้วชี้ Request URL มาที่": "Slack app: 开启 Event Subscriptions，并将 Request URL 指向",
+    "WhatsApp Cloud API (Meta): ตั้ง Callback URL": "WhatsApp Cloud API (Meta): 设置 Callback URL",
+    "Facebook Page (Meta): ตั้ง Callback URL": "Facebook Page (Meta): 设置 Callback URL",
+    "verify token ด้านล่าง": "下方的 verify token",
+    "ตั้ง webhook ชี้มาที่": "设置 webhook 指向",
+    "ผ่าน public HTTPS": "通过公网 HTTPS",
+    "ตรวจลายเซ็น": "校验签名",
+    "ตรวจลายเซ็น webhook": "校验 webhook 签名",
+    "ตั้งเองให้ตรงกับ Meta": "自行设置，需与 Meta 一致",
+    "💾 บันทึก + เชื่อมต่อ": "💾 保存 + 连接",
+    "🔊 Sound effects — เสียงประกอบในโลก office": "🔊 Sound effects — 办公室环境音效",
+    "🗣 Agent voices — เสียงพูดของ agents (ต้องมี Gemini key)": "🗣 Agent voices — agent 语音（需要 Gemini key）",
+    "🚀 Start at login — เปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ": "🚀 Start at login — 登录时自动启动办公室",
+    "🔄 Update checks — แจ้งเตือนเมื่อมีเวอร์ชันใหม่": "🔄 Update checks — 有新版本时提醒",
+    "💓 DIRECTOR HEARTBEAT — รอบตรวจภาพรวม/ตารางงาน (แจ้งเฉพาะที่ควรรู้)": "💓 DIRECTOR HEARTBEAT — 概览/日程检查周期（只提醒重要事项）",
+    "☕ SOCIAL — agents ว่างๆ จับกลุ่มคุย/หยอกล้อกันเอง (อาจเสนอโปรเจคให้คุณอนุมัติ)": "☕ SOCIAL — agent 空闲时组队闲聊/互动（可能向你提出项目建议）",
+    "💡 PROPOSALS — เว้นระยะอย่างน้อยเท่าไรต่อข้อเสนอโปรเจคที่ส่งถึงคุณ (กันเสนอถี่เกินไป)": "💡 PROPOSALS — 向你发送项目建议的最小间隔（防止过于频繁）",
+    "🎤 HOTKEY สั่งงานด้วยเสียง — กดค้าง = พูด · ปล่อย = ถอดเสียง + ส่งหา Director (ถอดด้วย Whisper/Gemini จาก key ใน CONNECT)": "🎤 语音指令热键 — 按住说话 · 松开后转文字并发送给 Director（使用 CONNECT 中的 Whisper/Gemini key）",
+    "🎙 ไมโครโฟน (input) — อุปกรณ์ที่ใช้รับเสียงพูดของคุณ": "🎙 麦克风（输入）— 用来接收你语音的设备",
+    "🔊 ลำโพง (output) — เสียงพูดของ agents และเสียงประกอบออกทางนี้": "🔊 扬声器（输出）— agent 语音和音效从这里输出",
+    "Right Ctrl (แนะนำ)": "Right Ctrl（推荐）",
+    "ปิด": "关闭",
+    "ทุก 15 นาที": "每 15 分钟",
+    "ทุก 30 นาที": "每 30 分钟",
+    "ทุก 1 ชั่วโมง": "每 1 小时",
+    "~ทุก 30 นาที": "约每 30 分钟",
+    "~ทุก 1 ชั่วโมง": "约每 1 小时",
+    "~ทุก 2 ชั่วโมง": "约每 2 小时",
+    "ไม่จำกัด": "不限制",
+    "อย่างน้อยทุก 1 ชั่วโมง": "至少每 1 小时",
+    "อย่างน้อยทุก 2 ชั่วโมง": "至少每 2 小时",
+    "อย่างน้อยทุก 4 ชั่วโมง": "至少每 4 小时",
+    "แนะนำ": "推荐",
+    "ปิดคีย์ลัด": "关闭快捷键",
+    "ค่าเริ่มต้นของระบบ": "系统默认",
+    "🔍 ค้นหา agent…": "🔍 搜索 agent…",
+    "🔍 ค้นหา skill…": "🔍 搜索技能…",
+    "🔍 ค้นหาเครื่องมือ / MCP server…": "🔍 搜索工具 / MCP server…",
+    "⚡ SYSTEM TOOLS — ความสามารถกลางของออฟฟิศ (agents เรียกใช้เองได้)": "⚡ SYSTEM TOOLS — 办公室的公共能力（agent 可自行调用）",
+    "🔧 BUILT-IN — เครื่องมือมาตรฐานของ Claude (ลบไม่ได้ · เปิด/ปิดรายตัวในหน้าแก้ไข agent)": "🔧 BUILT-IN — Claude 标准工具（不可删除，可在 agent 编辑页逐个开关）",
+    "🔌 MCP SERVERS — เพิ่มความสามารถใหม่ตามมาตรฐาน MCP": "🔌 MCP SERVERS — 按 MCP 标准添加新能力",
+    "ใส่ชื่อ + คำสั่งรัน server แล้ว assign ให้ agent ในหน้าแก้ไข เช่น": "输入名称 + server 启动命令，然后在 agent 编辑页分配，例如",
+    "คุมเบราว์เซอร์": "控制浏览器",
+    "หาเพิ่มได้จาก github.com/modelcontextprotocol/servers": "可在 github.com/modelcontextprotocol/servers 查找更多",
+    "ชื่อ เช่น github": "名称，例如 github",
+    "คำสั่งรัน เช่น npx -y @modelcontextprotocol/server-github": "启动命令，例如 npx -y @modelcontextprotocol/server-github",
+    "ตรวจงานก่อนส่ง CEO: reviewer เช็คงานที่มอบหมาย แล้วให้แก้ 1 รอบถ้าเจอปัญหา (ช้าลง+ใช้ token เพิ่ม)": "发送给 CEO 前先检查：reviewer 会检查已分配任务，发现问题时要求修正 1 轮（更慢且消耗更多 token）",
+    "🚀 จะเปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ": "🚀 登录时将自动打开办公室",
+    "สร้างใหม่ / โดย agents": "新建 / 由 agents 创建",
+    "มากับระบบ (ลบ/แก้ไม่ได้)": "系统内置（不可删除/编辑）",
+    "🎤 ถอดเสียงพูด (voice → text)": "🎤 语音转文字（voice → text）",
+    "🗣 เสียงพูดของ agents (TTS)": "🗣 agent 语音（TTS）",
+    "🖼 สร้างภาพ AI": "🖼 生成 AI 图片",
+    "agents เรียก /gen/image เองได้ · ภาพโชว์ในแชท": "agents 可自行调用 /gen/image · 图片会显示在聊天中",
+    "คุยเสียงสดกับออฟฟิศ": "与办公室实时语音聊天",
+    "หรือ": "或",
+    "ต้องมี main key:": "需要 main key:",
+    "— คลิกเพื่อไปตั้งค่า": "— 点击前往设置",
+    "⭐ MAIN API KEYS — กุญแจหลักของโปรแกรม (ปลดล็อกฟีเจอร์เสียง · TTS · รูปภาพ · realtime)": "⭐ MAIN API KEYS — 程序主 key（解锁语音、TTS、图片、实时通话）",
+    "🔑 API KEYS เพิ่มเติม — ฉีดเข้า env ของ agent ทุกตัว (เช่น GEMINI2 ให้ agents ใช้แยกจาก key หลัก)": "🔑 附加 API KEYS — 注入所有 agent 的环境变量（如 GEMINI2，供 agent 与主 key 分开使用）",
+    "ชื่อ เช่น GEMINI2": "名称，例如 GEMINI2",
+    "ค่า key (เก็บในเครื่องเท่านั้น)": "key 值（仅保存在本机）",
+    "🧠 MODELS / PROVIDERS — สมองของ agent (วาง key แล้วกด Connect · ตั้ง provider ต่อ agent ในหน้า AGENTS)": "🧠 MODELS / PROVIDERS — agent 的大脑（粘贴 key 后点击 Connect；在 AGENTS 页面为每个 agent 设置 provider）",
+    "📡 คุยกับออฟฟิศจากภายนอกผ่าน Director (main) — เปิดช่องทางที่ต้องการ แล้วสั่งงานจากมือถือได้เลย": "📡 通过 Director (main) 从外部与办公室沟通 — 开启需要的渠道后即可用手机下指令",
+    "Telegram ใช้ได้ทันที · ที่เหลือ ตั้ง webhook ผ่าน public HTTPS เช่น cloudflared": "Telegram 可直接使用；其他渠道需通过公网 HTTPS（如 cloudflared）设置 webhook",
+    "ความจำสนทนาแยกตามตัว agent — คำสั่งผ่าน CEO จะอยู่กับ Claude (Director)": "对话记忆按 agent 分开；通过 CEO 下达的指令会归到 Claude（Director）",
+    "ส่วนวงประชุม 🗣 ไม่สร้าง thread · ลบ thread = agent ลืมเรื่องนั้น": "会议 🗣 不创建普通 thread；删除 thread = agent 忘记该话题",
+    "⚙ DEFAULT RUNTIME — role/agent ไม่ได้ตั้งไว้จะใช้ตัวนี้": "⚙ DEFAULT RUNTIME — role/agent 未单独设置时使用这里",
+    "ปุ่มไมค์ / Right Ctrl": "麦克风按钮 / Right Ctrl",
+    "พรีวิวใน editor": "在编辑器中预览",
+    "ต้องมี main key:": "需要 main key:",
+    "คลิกเพื่อไปตั้งค่า": "点击前往设置",
+    "ยังไม่มี thread เลย": "还没有 thread",
+    "🗣 การประชุม (group sessions)": "🗣 会议（group sessions）",
+    "Sub-agents (ร่างแยก)": "Sub-agents（分身）",
+    "ครั้ง": "次",
+    "ร่างแยกของ": "分身来自",
+    "✗ ล้มเหลว": "✗ 失败",
+    "✓ สำเร็จ": "✓ 成功",
+    "หัวหน้าทีม (Lead)": "负责人（Lead）",
+    "ทีมงาน (Staff)": "成员（Staff）",
+    "🔒 skill พื้นฐานของระบบ — แก้ไข/ลบไม่ได้ (กำหนดไว้ให้ถูกต้องแล้ว)": "🔒 系统基础技能 — 不可编辑/删除（已正确配置）",
+    "DESCRIPTION (ให้ agent รู้ว่าควรหยิบใช้เมื่อไหร่)": "DESCRIPTION（告诉 agent 何时使用该技能）",
+    "SKILL CONTENT — ขั้นตอน / วิธีทำ": "SKILL CONTENT — 步骤 / 做法",
+    "✨ AURA — วงแสงเวทย์ใต้เท้า (ของตกแต่ง)": "✨ AURA — 脚下光环（装饰）",
+    "🏢 ระดับในองค์กร": "🏢 组织层级",
+    "⚙ RUNTIME + 🧠 สมอง (โมเดล/ผู้ให้บริการ)": "⚙ RUNTIME + 🧠 大脑（模型/provider）",
+    "โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)": "模型（留空 = provider 默认）",
+    "⚠ ยังไม่ได้เชื่อมต่อ provider นี้": "⚠ 该 provider 尚未连接",
+    "🔗 ไปหน้า CONNECT": "🔗 前往 CONNECT",
+    "Claude ใช้ login/แผนเดิม · เจ้าอื่นใช้ key แยก (ประหยัดกว่า)": "Claude 使用原登录/套餐；其他 provider 使用单独 key（更省）",
+    "✨ PERSONA COPILOT — บอกสั้นๆ ว่าอยากได้ agent แบบไหน (เติมให้ทุกช่อง)": "✨ PERSONA COPILOT — 简短描述想要什么样的 agent（自动补全所有字段）",
+    "แล้วกด": "然后点击",
+    "SYSTEM PROMPT — ตัวตนและภารกิจหลัก": "SYSTEM PROMPT — 身份和主要任务",
+    "🛠 ความเชี่ยวชาญ / ขอบเขตงาน": "🛠 专长 / 工作范围",
+    "ออกแบบ UI/UX": "UI/UX 设计",
+    "สี-ฟอนต์-spacing": "颜色-字体-spacing",
+    "🎭 บุคลิก / น้ำเสียง": "🎭 性格 / 语气",
+    "เป็นกันเอง": "友好",
+    "ขี้เล่นนิดๆ": "略带幽默",
+    "ตอบกระชับ": "回答简洁",
+    "ใช้อีโมจิบ้าง": "适度使用 emoji",
+    "🗣 ภาษาหลักที่ใช้ตอบ": "🗣 主要回复语言",
+    "ไทย": "中文",
+    "ตามภาษาของผู้ใช้": "跟随用户语言",
+    "📏 กฎการทำงาน (do / don't — บรรทัดละข้อ)": "📏 工作规则（do / don't — 每行一条）",
+    "ตรวจข้อมูลจากแหล่งจริงก่อนตอบเสมอ": "回答前始终从真实来源核查信息",
+    "ห้ามเดาตัวเลข": "禁止猜测数字",
+    "🗣 เสียงพูด (TTS) — กิมมิคประกาศงานสำคัญ · ▶ ฟังตัวอย่างก่อนเลือกได้": "🗣 语音（TTS）— 用于播报重要任务 · 可先按 ▶ 试听",
+    "ฟังตัวอย่างเสียงนี้": "试听这个声音",
+    "🔧 TOOLS (ว่าง = ชุดอ่านอย่างเดียว Read/Glob/Grep)": "🔧 TOOLS（留空 = 只读工具集 Read/Glob/Grep）",
+    "นักออกแบบ UI เน้น minimal พูดติดตลก": "偏 minimal、说话幽默的 UI 设计师",
+    "นี่คือตัวคุณเองในออฟฟิศ — ไม่มี prompt/skills เพราะคุณคือคนสั่ง ไม่ใช่ AI 😄": "这是你在办公室里的化身 — 没有 prompt/skills，因为你是下指令的人，不是 AI 😄",
+    "คุณคือคนสั่ง ไม่ใช่ AI": "你是下指令的人，不是 AI",
+    "เลือกหน้าตากับชื่อได้ตามใจ": "可以按喜好选择外观和名字",
+    "พิมพ์ชื่อโมเดลเองได้": "也可以手动输入模型名",
+    "🗣 เสียงพูดต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT": "🗣 语音需要 GEMINI_API_KEY — 请在 ⚙ CONNECT 中设置",
+  };
+  function phraseFallback(s) {
+    if (LANG !== "zh" || !s || !THAI.test(s)) return s;
+    let out = String(s);
+    const keys = Object.keys(PHRASE_ZH).sort((a, b) => b.length - a.length);
+    for (const k of keys) out = out.split(k).join(PHRASE_ZH[k]);
+    return out;
+  }
 
   // Dynamic content (chat, feed, agent names, thread titles, live counters)
   // must NOT be machine-translated — only UI chrome. Skip these subtrees.
@@ -1325,6 +1571,11 @@
       const raw = n.nodeValue, key = raw.trim();
       if (!key) continue;
       if (TR[key]) hits.push([n, raw.replace(key, TR[key])]);
+      else if (LANG === "zh" && THAI.test(key)) {
+        const fb = phraseFallback(key);
+        if (fb !== key) hits.push([n, raw.replace(key, fb)]);
+        else _pending.add(key);
+      }
       else if (THAI.test(key)) _pending.add(key);
     }
     for (const [node, val] of hits) node.nodeValue = val;
@@ -1335,6 +1586,11 @@
       const v = el.getAttribute && el.getAttribute(a); if (!v) continue;
       const key = v.trim();
       if (TR[key]) el.setAttribute(a, TR[key]);
+      else if (LANG === "zh" && THAI.test(key)) {
+        const fb = phraseFallback(key);
+        if (fb !== key) el.setAttribute(a, fb);
+        else _pending.add(key);
+      }
       else if (THAI.test(key)) _pending.add(key);
       }
     }
@@ -1367,8 +1623,12 @@
   // so the sweep settles to near-zero work once the cache is warm.
   if (LANG !== "th") {
     const _obs = new MutationObserver((muts) => {
-      for (const m of muts) for (const nd of m.addedNodes)
-        if (nd.nodeType === 1 && !inNoI18n(nd)) applyI18n(nd);
+      for (const m of muts) {
+        if (m.type === "characterData") applyI18n(m.target.parentElement || document.body);
+        for (const nd of m.addedNodes)
+          if (nd.nodeType === 1 && !inNoI18n(nd)) applyI18n(nd);
+          else if (nd.nodeType === 3 && !inNoI18n(nd)) applyI18n(nd.parentElement || document.body);
+      }
     });
     // Pull the whole seeded map for this language ONCE up front, so the very
     // first paint is already translated (no Thai flash) and tr() knows every
@@ -1385,12 +1645,16 @@
     }
     addEventListener("DOMContentLoaded", async () => {
       await preloadSeed();
+      try {
+        const ptt = document.getElementById("pttTxt");
+        if (ptt) ptt.textContent = tr("กำลังฟัง…");
+      } catch {}
       applyI18n(document.body);
       // tr()-built chrome (the now-strip) may have rendered from a task event
       // that beat the async preload — re-render it now that TR is complete, or
       // a steady "กำลังทำ N งาน" would stay Thai until the next task change.
       try { renderRunning(); } catch {}
-      _obs.observe(document.body, { childList: true, subtree: true });
+      _obs.observe(document.body, { childList: true, characterData: true, subtree: true });
       setInterval(() => { if (!document.hidden) applyI18n(document.body); }, 1500);
     });
   }
@@ -1597,7 +1861,9 @@
   _miniMQ.addEventListener("change", () => setComposerHint());
 
   function setTarget(id) {
+    if (groupView) LAST_GROUP_VIEW[target] = { ...groupViewMeta };
     groupView = null;  // leaving a meeting log view
+    groupViewMeta = { key: null, title: "", bucket: "@group", faceId: null };
     if (typeof hideSpeakBar === "function") hideSpeakBar();
     target = id;
     document.getElementById("compName").textContent = nameOf(id);
@@ -1608,7 +1874,9 @@
     // The realtime call always reaches the main agent — offer it from the CEO seat too.
     document.getElementById("liveBtn").style.display = (id === "main" || id === "ceo") ? "" : "none";
     renderRail();
-    refreshThreadBar(true);  // clicking a seat always shows that agent's latest thread
+    const last = LAST_GROUP_VIEW[target];
+    if (last && last.key) openGroupLog(last.key, last.title || last.key, last.bucket || "@group", last.faceId ?? null);
+    else refreshThreadBar(true);  // clicking a seat always shows that agent's latest thread
   }
 
   // ---- chat ---------------------------------------------------------------
@@ -1632,7 +1900,22 @@
       w.append(f, document.createTextNode(nameOf(String(who).split("#")[0])));
       d.appendChild(w);
     }
-    d.appendChild(document.createTextNode(text));
+    const body = document.createElement("div");
+    body.className = "msgtext";
+    body.textContent = text;
+    d.appendChild(body);
+    const shouldFold = String(text || "").length > 900 || String(text || "").split("\n").length > 12;
+    if (shouldFold) {
+      body.classList.add("collapsed");
+      const btn = document.createElement("button");
+      btn.className = "moretext";
+      btn.textContent = "展开全文";
+      btn.onclick = () => {
+        const collapsed = body.classList.toggle("collapsed");
+        btn.textContent = collapsed ? "展开全文" : "收起";
+      };
+      d.appendChild(btn);
+    }
     if (String(cls).includes("agent")) attachMediaPreviews(d, text);
     const tm = document.createElement("div");
     tm.className = "msgtime";
@@ -1648,6 +1931,22 @@
     d.className = "chip"; d.innerHTML = html;
     log.appendChild(d);
     log.scrollTop = log.scrollHeight;
+  }
+  function addMeetingTrace(m) {
+    const key = m.meeting;
+    if (!key) return addMsg("agent summary", "main", m.text, m.ts, "· meeting");
+    const title = m.meetingTitle || String(m.text || "").split("\n")[0].replace(/^📝\s*Meeting summary:\s*/i, "") || key;
+    const d = addMsg("agent summary", "main", m.text, m.ts, "· meeting");
+    const row = document.createElement("div");
+    row.className = "btnrow";
+    row.style.margin = "8px 0 0";
+    const btn = document.createElement("button");
+    btn.className = "send";
+    btn.textContent = "🗣 查看完整会议记录";
+    btn.onclick = () => openGroupLog(key, title, "@group");
+    row.appendChild(btn);
+    d.appendChild(row);
+    return d;
   }
   // "agent is typing" status bubble — optional icon + a live label saying what the
   // agent is doing right now (thinking / reading a file / waiting for approval…),
@@ -2809,6 +3108,7 @@
   }
 
   // 🔗 CONNECT: API key vault + external channel connectors.
+  const threadGroupsOpen = new Set();
   async function renderConnectTab() {
     const regAll = await fetch("/registry").then((x) => x.json()).catch(() => ({}));
     const chStatus = await fetch("/channels/status").then((x) => x.json()).catch(() => ({}));
@@ -2894,6 +3194,13 @@
       const mainKeys = regAll.apiKeys || {};
       const subhead = (txt) => { const d = document.createElement("div");
         d.style.cssText = "font-size:10px;color:var(--dim);font-weight:600;margin:9px 0 2px;opacity:.85"; d.textContent = txt; provbox.appendChild(d); };
+      const wslConfigRow = ({ checkboxId = "", checkboxClass = "", distroId = "", distroClass = "", checked = false, distro = "", saveId = "", saveClass = "", runtime = "CLI" }) => `
+        <div class="wslcfg">
+          <label><input ${checkboxId ? `id="${checkboxId}"` : ""} ${checkboxClass ? `class="${checkboxClass}"` : ""} type="checkbox" ${checked ? "checked" : ""}>
+            <span>WSL bridge<small>${runtime} 从 WSL shell 启动，读取 WSL 内的 PATH/login/config。</small></span></label>
+          <input ${distroId ? `id="${distroId}"` : ""} ${distroClass ? `class="${distroClass}"` : ""} type="text" placeholder="Distro，可留空" value="${esc(distro || "")}">
+          <div class="winbtn ${saveClass || ""}" ${saveId ? `id="${saveId}"` : ""} title="保存 WSL bridge 设置">💾</div>
+        </div>`;
 
       // Generic provider card: status + masked key + Connect / retest / change / remove.
       const providerCard = (id, label, where, viaProxy, removable, local) => {
@@ -2921,7 +3228,7 @@
         const stat = card.querySelector(".pstat");
         const connect = async (key) => {
           if (key) await api("/registry/provider", { provider: id, token: key });
-          stat.textContent = "🧪 กำลังเชื่อมต่อ…";
+          stat.textContent = tr("🧪 กำลังเชื่อมต่อ…");
           const r = await api("/registry/provider/test", { provider: id });
           if (r.ok) renderConnectTab();
           else stat.innerHTML = `<span style="color:#ff6258">❌ ${r.msg || "เชื่อมต่อไม่สำเร็จ"}</span>`;
@@ -2970,11 +3277,8 @@
           : (cauth.useWsl ? " · WSL" + (cauth.distro ? " " + cauth.distro : "") : "");
         cc.innerHTML = `<div class="meta"><b>${cauth.connected ? "✅" : "⚪"} Claude · Anthropic</b>
             <span class="pstat" style="color:${cauth.connected ? "#4ade80" : "var(--dim)"}">${statusText}${esc(cdetail)}</span></div>` + controls + `
-          <div class="assistrow" style="flex:1 1 100%;margin-top:6px">
-            <label class="chk" style="margin:0;cursor:pointer"><input id="claudeUseWsl" type="checkbox" ${regAll.claudeUseWsl ? "checked" : ""}> WSL bridge</label>
-            <input id="claudeDistro" placeholder="WSL distro (optional)" value="${esc(regAll.claudeWslDistro || "")}" style="flex:1 1 130px;margin:0">
-            <button class="sparkle" id="claudeCfgSave" style="flex:0 0 auto">💾</button>
-          </div>`;
+          ${wslConfigRow({ checkboxId: "claudeUseWsl", distroId: "claudeDistro", saveId: "claudeCfgSave",
+            checked: !!regAll.claudeUseWsl, distro: regAll.claudeWslDistro || "", runtime: "Claude Code" })}`;
         const saveKey = (v) => { if (v) api("/registry/key", { name: "ANTHROPIC_API_KEY", value: v }).then(() => renderConnectTab()); };
         const revealKeyInput = () => {
           const meta = cc.querySelector(".meta"); cc.innerHTML = ""; cc.appendChild(meta);
@@ -3017,11 +3321,8 @@
         cc.innerHTML = `<div class="meta"><b>${ok ? "✅" : "⚪"} ${label} runtime</b>
             <span class="pstat" style="color:${ok ? "#4ade80" : "var(--dim)"}">${esc(detail)}</span>
             <span style="font-size:10.5px;color:var(--dim)">ใช้ config/login ของ ${label} เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES</span></div>
-          <div class="assistrow" style="flex:1 1 100%;margin-top:6px">
-            <label class="chk" style="margin:0;cursor:pointer"><input class="cliUseWsl" type="checkbox" ${regAll[id + "UseWsl"] ? "checked" : ""}> WSL bridge</label>
-            <input class="cliDistro" placeholder="WSL distro (optional)" value="${esc(regAll[id + "WslDistro"] || "")}" style="flex:1 1 130px;margin:0">
-            <button class="sparkle cliCfgSave" style="flex:0 0 auto">💾</button>
-          </div>
+          ${wslConfigRow({ checkboxClass: "cliUseWsl", distroClass: "cliDistro", saveClass: "cliCfgSave",
+            checked: !!regAll[id + "UseWsl"], distro: regAll[id + "WslDistro"] || "", runtime: label })}
           <div class="winbtn" data-a="retest" title="ทดสอบใหม่">🧪</div>`;
         cc.querySelector('[data-a="retest"]').onclick = () => renderConnectTab();
         cc.querySelector(".cliCfgSave").onclick = async () => {
@@ -3439,19 +3740,29 @@
         for (const [aid, list] of entries) {
           const isGroup = aid === "@group";
           const isSub = aid === "@sub";
+          const groupKey = "threads:" + aid;
+          const open = threadGroupsOpen.has(groupKey);
           const head = document.createElement("div");
-          head.className = "arow";
-          head.style.cursor = "default";
+          head.className = "arow threadGroupHead";
+          head.style.cursor = "pointer";
           if (!isGroup && !isSub) {
             const f = document.createElement("div");
             f.className = "face"; face(f, aid, 34);
             head.appendChild(f);
           }
           head.insertAdjacentHTML("beforeend",
-            `<div class="meta"><b>${isGroup ? "🗣 การประชุม (group sessions)"
+            `<div class="meta"><b><span style="display:inline-block;width:14px">${open ? "▾" : "▸"}</span>${isGroup ? "🗣 การประชุม (group sessions)"
               : isSub ? "👻 Sub-agents (ร่างแยก)" : nameOf(aid)}</b>` +
             `<span>${list.length} ${(isGroup || isSub) ? "ครั้ง" : "thread"}</span></div>`);
           box.appendChild(head);
+          const rows = document.createElement("div");
+          rows.className = "threadGroupRows";
+          rows.style.display = open ? "" : "none";
+          head.onclick = () => {
+            if (threadGroupsOpen.has(groupKey)) threadGroupsOpen.delete(groupKey);
+            else threadGroupsOpen.add(groupKey);
+            openSettings("threads");
+          };
           for (const s of list.slice().sort((a, b) => b.ts - a.ts)) {
             const row = document.createElement("div");
             row.className = "arow";
@@ -3474,8 +3785,9 @@
               e.stopPropagation();
               api("/sessions/delete", { agent: aid, key: s.key }).then(() => openSettings("threads"));
             };
-            box.appendChild(row);
+            rows.appendChild(row);
           }
+          box.appendChild(rows);
         }
       });
     } else {
@@ -4143,6 +4455,10 @@
 
   // ---- 🧩 plugins: list + open a plugin's panel inside the modal -----------
   document.getElementById("pluginBtn").onclick = () => openPlugins();
+  document.getElementById("meetingsBtn").onclick = () => {
+    document.getElementById("moreMenu").classList.remove("open");
+    openSettings("threads");
+  };
   // 🔀 human-language Workflow Builder — its own resizable window
   document.getElementById("workflowBtn").onclick = () => {
     document.getElementById("moreMenu").classList.remove("open");
@@ -4651,10 +4967,10 @@
           // WHO is in here: you (window) and/or named agents — explicit.
           const who = (p.agents || []).map(nameOf).join(", ");
           const st = [];
-          if (p.open && p.visible) st.push(`<span style="color:#4ade80">🖥 คุณเปิดทำงานอยู่</span>`);
-          else if (p.open) st.push(`<span style="color:#c0a4ff">🫥 ของคุณทำงานเบื้องหลัง</span>`);
-          if (p.ai) st.push(`<span style="color:#5ec8ff">🤖 ${who || "agent"} กำลังทำงาน</span>`);
-          if (!st.length) st.push(`<span style="color:var(--dim)">⚪ ปิด — ไม่มีใครทำงาน</span>`);
+          if (p.open && p.visible) st.push(`<span style="color:#4ade80">${tr("🖥 คุณเปิดทำงานอยู่")}</span>`);
+          else if (p.open) st.push(`<span style="color:#c0a4ff">${tr("🫥 ของคุณทำงานเบื้องหลัง")}</span>`);
+          if (p.ai) st.push(`<span style="color:#5ec8ff">🤖 ${who || "agent"} ${tr("กำลังทำงาน")}</span>`);
+          if (!st.length) st.push(`<span style="color:var(--dim)">${tr("⚪ ปิด — ไม่มีใครทำงาน")}</span>`);
           // State-driven controls: closed → เปิด; visible → ซ่อน+ปิด;
           // hidden → Resume+ปิด. Shell/folder always; ✕ always; 🗑 created-only.
           // While an AGENT works here the project is LOCKED to you — the only
@@ -4973,14 +5289,14 @@
           row.style.display = ""; row.innerHTML = "";
           const f = document.createElement("div"); f.className = "face"; face(f, j.agent, 30);
           row.appendChild(f);
-          const desc = j.running ? `🔴 กำลังทำงานนี้อยู่…`
+          const desc = j.running ? tr("🔴 กำลังทำงานนี้อยู่…")
             : j.mode === "every" ? `🔁 ทุก ${j.everyMin} นาที`
             : j.mode === "at" && j.daily ? `🔁 ทุกวัน ${j.time}`
             : j.mode === "at" ? `🕐 ${new Date(j.at).toLocaleString()}`
             : "⚡ ทันที";
           row.insertAdjacentHTML("beforeend",
             `<div class="meta"><b>${j.prompt.slice(0, 56).replace(/</g, "&lt;")}</b>
-               <span>${nameOf(j.agent)} · ${desc}${j.enabled === false ? " · ⏸ พัก" : ""}${(!j.running && j.lastRun) ? " · ล่าสุด " + new Date(j.lastRun).toLocaleTimeString() : ""}</span></div>` +
+               <span>${nameOf(j.agent)} · ${desc}${j.enabled === false ? tr(" · ⏸ พัก") : ""}${(!j.running && j.lastRun) ? tr(" · ล่าสุด ") + new Date(j.lastRun).toLocaleTimeString() : ""}</span></div>` +
             (j.running ? "" :
               `<div class="winbtn" title="แก้ไข">✎</div>
                <div class="winbtn" title="พัก/เล่น">${j.enabled === false ? "▶" : "⏸"}</div>`) +
@@ -5182,7 +5498,9 @@
   // ---- sessions (threads) ---------------------------------------------------
   const SESS = {};  // target -> "new" | session key | undefined (= latest)
   const CUR = {};   // target -> resolved current thread key (for filtering)
+  const LAST_GROUP_VIEW = {};  // target -> last seen group/sub log
   let groupView = null;  // meeting key while reading/watching a group session
+  let groupViewMeta = { key: null, title: "", bucket: "@group", faceId: null };
   function setThreadLabel(t) { document.getElementById("threadName").textContent = t; }
   function fmtTok(n) { n = +n || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -5225,6 +5543,7 @@
   // one read-only in the chat pane; live messages keep streaming in.
   async function openGroupLog(key, title, bucket = "@group", faceId = null) {
     groupView = key;
+    groupViewMeta = { key, title, bucket, faceId };
     setThreadLabel((bucket === "@sub" ? "👻 " : "🗣 ") + title);
     document.getElementById("inp").placeholder = bucket === "@sub"
       ? tr("งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย")
@@ -5240,7 +5559,9 @@
         renderGroupMsg(m, faceId);
       }
     } catch {}
-    // Load historical action items for finished meetings (if any)
+    // Load historical follow-up drafts for finished meetings. These are not
+    // scheduled jobs; they stay attached to the meeting record until the owner
+    // acts on them manually.
     if (!live && bucket === "@group") {
       try {
         const actionsRes = await fetch(`/sessions/${encodeURIComponent(key)}/actions`);
@@ -5249,7 +5570,10 @@
           if (actions && actions.length) {
             for (const a of actions) {
               const ownerName = (reg.agents[a.owner] || { name: a.owner }).name;
-              addMsg("you", null, `✅ <b>${ownerName}</b>: ${a.text}`, a.created, "· action item");
+              addMsg("agent summary", null, `📝 <b>${ownerName}</b>: ${a.text}` +
+                (a.due ? ` <span style="color:var(--dim)">⏰ ${a.due}</span>` : "") +
+                `<br><span style="color:var(--dim);font-size:11px">会议跟进项草案，不会自动创建待办。</span>`,
+                a.created, "· follow-up draft");
             }
           }
         }
@@ -5264,6 +5588,7 @@
   // history replay (above) and the live chat.message handler use one path.
   function renderGroupMsg(m, faceId) {
     if (m.who === "tool") addToolRow(m.text);
+    else if (m.isSummary || m.phase === "summary") addMsg("agent summary", faceId || m.who || "main", "📝\n" + m.text, m.ts, "· conclusion");
     else if (m.who === "you") addMsg("you", null, m.text, m.ts);
     else if (m.who === "ceo") addMsg("you", null, m.text, m.ts);   // CEO = you
     else addMsg("agent", faceId || m.who, m.text, m.ts, m.phase ? "· " + m.phase : "");
@@ -5322,6 +5647,7 @@
       for (const m of r.log || []) {
         if (!ACTIVITY_FILTER.showThread(m)) continue;
         if (m.who === "tool") addToolRow(m.text);
+        else if (m.phase === "meeting-summary" || m.meeting) addMeetingTrace(m);
         else addMsg(m.who === "you" ? "you" : "agent", m.who === "you" ? null : sessAgent(), m.text, m.ts,
           m.who !== "you" && m.model ? "🧠 " + m.model : "");
       }
@@ -5390,7 +5716,7 @@
         hd.style.cursor = "default";
         hd.style.color = "var(--dim)";
         hd.style.fontSize = "10.5px";
-        hd.textContent = tr("—  🗣 การประชุม  —");
+        hd.textContent = tr("—  🗣 会议记录  —");
         m.appendChild(hd);
         for (const s of meets) {
           const o = document.createElement("div");
@@ -5486,6 +5812,7 @@
   function openDiscuss() {
     modal.classList.add("open");
     const picked = new Set();
+    const selectedHistory = new Set();
     const tmplOpts = MEETING_TEMPLATES
       .map((t) => `<option value="${t.id}">${t.label}</option>`).join("");
     modalCard.innerHTML = hdr("🗣 AGENT DISCUSSION") +
@@ -5495,20 +5822,81 @@
          <input id="dTopic" placeholder='เช่น "วางแผนฟีเจอร์ onboarding ใหม่"'></div>
        <div class="field"><label>PARTICIPANTS (เลือก 2-4 ตัว)</label>
          <div class="checks" id="dWho"></div></div>
-       <div class="field"><label>DISCUSSION ROUNDS (ความลึกของวงถก)</label>
-         <select id="dRounds"><option value="1">1 — เร็ว</option>
-         <option value="2" selected>2 — มาตรฐาน</option><option value="3">3 — ลึก</option></select></div>
+	       <div class="field"><label>DISCUSSION ROUNDS (ความลึกของวงถก)</label>
+	         <select id="dRounds">
+	           <option value="1">1 discussion round</option>
+	           <option value="2" selected>2 discussion rounds</option>
+	           <option value="3">3 discussion rounds</option>
+	           <option value="4">4 discussion rounds</option>
+	           <option value="5">5 discussion rounds</option>
+	           <option value="6">6 discussion rounds</option>
+	         </select>
+	         <div id="roundHint" style="font-size:11px;color:var(--dim);margin-top:5px"></div></div>
+       <div class="field"><label>相关历史会议总结（可选，默认不带入）</label>
+         <input id="dHistoryQ" placeholder="搜索会议标题、总结、参与者…">
+         <div id="dHistoryHint" style="font-size:11px;color:var(--dim);margin-top:5px">未选择历史会议。</div>
+         <div class="meetingHistoryList" id="dHistoryList" style="margin-top:6px"></div></div>
        <div class="btnrow">
          <button id="dCancel">Cancel</button>
          <button class="primary" id="dGo">🗣 Start discussion</button>
        </div>`;
     // Picking a template fills topic + rounds (unless the user edits them after).
+    const updateRoundHint = () => {
+      const n = picked.size;
+      const r = Math.max(1, Number(modalCard.querySelector("#dRounds").value) || 2);
+      const turns = n ? n * (1 + r) : 0;
+      modalCard.querySelector("#roundHint").textContent =
+        n ? `量化: ${n} 人 x (1 轮 opening + ${r} 轮 discussion) = ${turns} 次发言，结束后自动生成总结和结论。`
+          : `量化: 每人 1 轮 opening + N 轮 discussion，结束后自动生成总结和结论。`;
+    };
     modalCard.querySelector("#dTmpl").onchange = function () {
       const t = MEETING_TEMPLATES.find((x) => x.id === this.value);
       if (!t) return;
       if (t.topic) modalCard.querySelector("#dTopic").value = t.topic;
       modalCard.querySelector("#dRounds").value = String(t.rounds);
+      updateRoundHint();
     };
+    modalCard.querySelector("#dRounds").onchange = updateRoundHint;
+    const historyHint = modalCard.querySelector("#dHistoryHint");
+    const historyList = modalCard.querySelector("#dHistoryList");
+    const updateHistoryHint = () => {
+      historyHint.textContent = selectedHistory.size
+        ? `已选择 ${selectedHistory.size} 个历史会议总结，会在 opening 阶段带入。`
+        : "未选择历史会议。";
+    };
+    const renderHistory = (items) => {
+      historyList.innerHTML = "";
+      if (!items.length) {
+        historyList.innerHTML = `<div style="font-size:11.5px;color:var(--dim)">没有找到可用的历史会议总结。</div>`;
+        return;
+      }
+      for (const m of items) {
+        const row = document.createElement("div");
+        row.className = "meetingHistoryItem" + (selectedHistory.has(m.key) ? " on" : "");
+        row.innerHTML =
+          `<b>${esc(m.title || m.key)}</b>` +
+          `<span>${esc(new Date(m.ts || Date.now()).toLocaleString())} · ${esc((m.names || m.agents || []).join(", "))}</span>` +
+          `<p>${esc(String(m.summary || "").replace(/\s+/g, " ").slice(0, 220))}</p>`;
+        row.onclick = () => {
+          if (selectedHistory.has(m.key)) selectedHistory.delete(m.key);
+          else if (selectedHistory.size < 5) selectedHistory.add(m.key);
+          row.classList.toggle("on", selectedHistory.has(m.key));
+          updateHistoryHint();
+        };
+        historyList.appendChild(row);
+      }
+    };
+    const searchHistory = async () => {
+      const q = modalCard.querySelector("#dHistoryQ").value.trim();
+      const r = await fetch(`/meetings/search?q=${encodeURIComponent(q)}&limit=12`).then((x) => x.json()).catch(() => ({ meetings: [] }));
+      renderHistory(r.meetings || []);
+    };
+    let historyTimer = null;
+    modalCard.querySelector("#dHistoryQ").oninput = () => {
+      clearTimeout(historyTimer);
+      historyTimer = setTimeout(searchHistory, 250);
+    };
+    searchHistory();
     const box = modalCard.querySelector("#dWho");
     // ทีมทั้งหมดจาก registry (CEO คือคุณ — ไม่เข้าร่วมวงประชุมของ AI)
     for (const id of Object.keys(ROSTER).filter((x) => x !== "ceo")) {
@@ -5522,15 +5910,17 @@
       f.style.backgroundPosition = `${-14 * k}px ${-14 * k}px`;
       c.appendChild(f);
       c.appendChild(document.createTextNode(`${nameOf(id)} · ${roleOf(id)}`));
-      c.onclick = () => { picked.has(id) ? picked.delete(id) : picked.add(id); c.classList.toggle("on"); };
+      c.onclick = () => { picked.has(id) ? picked.delete(id) : picked.add(id); c.classList.toggle("on"); updateRoundHint(); };
       box.appendChild(c);
     }
+    updateRoundHint();
     modalCard.querySelector("#dCancel").onclick = closeModal;
     modalCard.querySelector("#dGo").onclick = async () => {
       const topic = modalCard.querySelector("#dTopic").value.trim();
       if (!topic || picked.size < 2) return;
       const r = await api("/discuss", { agents: [...picked], topic,
-        rounds: Number(modalCard.querySelector("#dRounds").value) }).catch(() => ({}));
+        rounds: Number(modalCard.querySelector("#dRounds").value),
+        historyMeetings: [...selectedHistory] }).catch(() => ({}));
       closeModal();
       addChip(`${tr("🤝 ประชุมเริ่ม:")} <b>${topic.slice(0, 50)}</b>`);
       // Open the live meeting so messages stream in and the speak bar appears.
@@ -5989,7 +6379,7 @@
         hideTyping();
         if (ev.isSummary) {
           // Secretary's minutes — render distinctly, prefixed so it reads as a recap.
-          addMsg("agent", ev.agent, "📝\n" + ev.text, ev.ts, "· summary");
+          addMsg("agent summary", ev.agent, "📝\n" + ev.text, ev.ts, "· conclusion");
         } else if (ev.agent === "ceo") {
           addMsg("you", null, ev.text, ev.ts);   // owner spoke into the meeting
         } else {
@@ -6135,8 +6525,8 @@
         const dot = document.getElementById("liveDot");
         if (pause) pause.style.display = ev.paused ? "none" : "";
         if (resume) resume.style.display = ev.paused ? "" : "none";
-        if (dot) dot.textContent = ev.paused ? "⏸ พักวงประชุม" : "🔴 LIVE meeting — พิมพ์เข้าวงประชุม";
-        if (ev.ended && dot) dot.textContent = "🏁 กำลังจบ…";
+        if (dot) dot.textContent = ev.paused ? tr("⏸ พักวงประชุม") : tr("🔴 LIVE meeting — พิมพ์เข้าวงประชุม");
+        if (ev.ended && dot) dot.textContent = tr("🏁 กำลังจบ…");
       }
     }
     else if (ev.type === "meeting.resumed") {
@@ -6147,15 +6537,16 @@
         const dot = document.getElementById("liveDot");
         if (pause) pause.style.display = "";
         if (resume) resume.style.display = "none";
-        if (dot) dot.textContent = "🔴 LIVE meeting — พิมพ์เข้าวงประชุม";
+        if (dot) dot.textContent = tr("🔴 LIVE meeting — พิมพ์เข้าวงประชุม");
       }
     }
     else if (ev.type === "meeting.action") {
       // An action item was minted by the summary secretary. Surface it as a
       // chip in the feed (NOT on Mission Control — see ADR-0001).
       if (!ev.replay && ev.action) {
-        addChip(`✅ <b>${nameOf(ev.action.owner)}</b>: ${ev.action.text}` +
-          (ev.action.due ? ` <span style="color:var(--dim)">⏰ ${ev.action.due}</span>` : ""));
+        addChip(`📝 会议跟进项草案 · <b>${nameOf(ev.action.owner)}</b>: ${ev.action.text}` +
+          (ev.action.due ? ` <span style="color:var(--dim)">⏰ ${ev.action.due}</span>` : "") +
+          ` <span style="color:var(--dim)">不会自动创建待办</span>`);
       }
     }
     else if (ev.type === "skill.created") {
@@ -6343,12 +6734,20 @@
     }
     const session = SESS[target];
     if (session === "new") SESS[target] = undefined;  // next sends continue it
-    await fetch("/chat", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: target, prompt, session,
-        files: files.map((f) => ({ path: f.path, name: f.name, kind: f.kind })) }),
-    });
-    refreshThreadBar();  // a fresh thread exists server-side immediately
+    try {
+      const r = await fetch("/chat", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: target, prompt, session,
+          files: files.map((f) => ({ path: f.path, name: f.name, kind: f.kind })) }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json().catch(() => ({}));
+      if (j.session) { SESS[target] = j.session; CUR[target] = j.session; }
+      refreshThreadBar(true);  // reload the exact persisted thread for this send
+    } catch (e) {
+      hideTyping();
+      addChip("⚠ 发送失败，已保留在当前窗口：" + esc(e && e.message ? e.message : e));
+    }
   }
   document.getElementById("send").onclick = send;
   (function () {

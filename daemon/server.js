@@ -431,6 +431,66 @@ function latestSession(agent) {
   return l.length ? l.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
 }
 
+function appendSessionNote(agent, text, extra = {}) {
+  if (!agent || !text) return false;
+  const list = sess[agent] || [];
+  let entry = latestSession(agent);
+  if (!entry) {
+    entry = { key: "s" + Date.now(), sid: null, ts: Date.now(), title: "Meeting note", log: [] };
+    sess[agent] = list;
+    list.push(entry);
+  } else if (!list.includes(entry)) {
+    list.push(entry);
+  }
+  entry.log = entry.log || [];
+  const meetingKey = extra.meeting || "";
+  const notePhase = extra.phase || "meeting-note";
+  if (meetingKey && entry.log.some((m) => m && m.phase === notePhase && m.meeting === meetingKey)) return false;
+  const note = {
+    who: extra.who || "main",
+    text: String(text),
+    ts: Date.now(),
+    phase: notePhase,
+    isSummary: !!extra.isSummary,
+    meeting: meetingKey || undefined,
+    meetingTitle: extra.meetingTitle || undefined,
+    agents: extra.agents || undefined,
+  };
+  entry.log.push(note);
+  while (entry.log.length > 250) entry.log.shift();
+  return true;
+}
+
+function backfillMeetingSummaries() {
+  let changed = false;
+  for (const meeting of sess["@group"] || []) {
+    const summary = (meeting.log || []).find((m) => m && (m.isSummary || m.phase === "summary"));
+    if (!summary || !meeting.agents || !meeting.agents.length) continue;
+    for (const agent of meeting.agents) {
+      const ownLines = (meeting.log || [])
+        .filter((m) => m && m.who === agent && m.text)
+        .slice(0, 4)
+        .map((m) => `- [${m.phase || "chat"}] ${String(m.text).slice(0, 500)}`)
+        .join("\n");
+      const text = [
+        `🗣 Meeting trace: ${meeting.title || meeting.key}`,
+        ownLines ? `\nYour contributions:\n${ownLines}` : "",
+        `\nSummary:\n${summary.text || ""}`,
+      ].join("\n").trim();
+      if (appendSessionNote(agent, text, {
+        who: "main",
+        phase: "meeting-summary",
+        isSummary: true,
+        meeting: meeting.key,
+        meetingTitle: meeting.title,
+        agents: meeting.agents,
+      })) changed = true;
+    }
+  }
+  if (changed) saveSess();
+}
+try { backfillMeetingSummaries(); } catch (e) { console.error("[maint] meeting backfill:", e.message); }
+
 // The swappable brain: which backend an agent's `claude` spawn talks to. Returns
 // env overrides (ANTHROPIC_BASE_URL/_AUTH_TOKEN) + --model args; "claude"/unset/
 // unconfigured → empties, so the spawn is unchanged (fail-open). See providers.js.
@@ -714,6 +774,8 @@ function ctxWindow(agent) {
 // Short "provider/model" tag shown in the chat history (which brain produced a line).
 function modelTag(agent) {
   const a = (reg.agents && reg.agents[agent]) || {};
+  const rt = runtimeConfig.effectiveAgentRuntime(reg, agent);
+  if (rt !== "claude") return rt;
   const p = a.provider || reg.defaultProvider || "claude";
   if (p === "claude") return a.model ? "claude/" + a.model : "claude";
   return a.model ? p + "/" + a.model : p;
@@ -1743,6 +1805,7 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
       killTree(child);
       broadcast({ type: "task.failed", agent, task, session: entry.key,
         runtime, model, reason: `watchdog: ${reason}` });
+      recordFailureMessage(entry, agent, task, runtime, model, `watchdog: ${reason}`);
       fireDone(`(watchdog: ${reason})`, false);
     },
   });
@@ -2097,6 +2160,7 @@ function runHermesRuntime(agent, prompt, opts = {}) {
       killTree(child);
       broadcast({ type: "task.failed", agent, task, session: entry.key,
         runtime, model, reason: `watchdog: ${reason}` });
+      recordFailureMessage(entry, agent, task, runtime, model, `watchdog: ${reason}`);
       finish(`(watchdog: ${reason})`, false);
     },
   });
@@ -2157,6 +2221,10 @@ function runHermesRuntime(agent, prompt, opts = {}) {
 function friendlyAdapterError(message, runtime) {
   const s = cleanRuntimeError(message, runtime);
   const rt = String(runtime || "").toLowerCase();
+  if (/watchdog:\s*idle/i.test(s))
+    return "任务超时：运行过程中 5 分钟没有新的进展，已自动停止。你的问题已保留在当前聊天里，可以重试或换一个 runtime。";
+  if (/watchdog:/i.test(s))
+    return "任务超时或被看门狗停止。你的问题已保留在当前聊天里，可以重试或换一个 runtime。";
   if (/command not found:\s*codex|codex:\s+not found|codex: command not found/i.test(s))
     return "Codex CLI 未找到。WSL 中没有可执行的 codex 命令；请安装/修复 Codex CLI，或让 BagIdea 通过 npx @openai/codex 调用。";
   if (/Missing optional dependency @openai\/codex-linux-x64/i.test(s))
@@ -2172,6 +2240,18 @@ function friendlyAdapterError(message, runtime) {
   if (/ENOENT/i.test(s) && rt)
     return `${runtimeConfig.runtimeLabel(rt)} CLI 未找到。请检查该 runtime 的安装和 PATH 配置。`;
   return s || `${runtimeConfig.runtimeLabel(rt)} runtime failed.`;
+}
+
+function recordFailureMessage(entry, agent, task, runtime, model, reason) {
+  if (!entry) return;
+  const text = friendlyAdapterError(reason, runtime);
+  if (!text) return;
+  entry.log = entry.log || [];
+  entry.log.push({ who: "agent", text, ts: Date.now(), model, runtime, error: true });
+  entry.ts = Date.now();
+  while (entry.log.length > 200) entry.log.shift();
+  saveSess();
+  broadcast({ type: "chat.message", agent, task, session: entry.key, runtime, model, text });
 }
 
 function runAgent(agent, prompt, opts = {}) {
@@ -2367,6 +2447,7 @@ function runClaudeRuntime(agent, prompt, opts = {}) {
       // Already-cleared (doneFired) runs are skipped by fireDone's guard.
       broadcast({ type: "task.failed", agent, task, session: entry.key,
         reason: `watchdog: ${reason}` });
+      recordFailureMessage(entry, agent, task, "claude", mtag, `watchdog: ${reason}`);
       fireDone(`(watchdog: ${reason})`, false);
     },
   });
@@ -4117,8 +4198,9 @@ const SOCIAL_PROPOSAL_INSTRUCTION =
   `"plugin" เท่านั้น (ดู docs/guide/plugins.md — plugin เข้าถึงโปรแกรมได้ลึก: panel, route, command, ` +
   `broadcast, ฯลฯ ทำเป็น solution จริงให้เจ้าของได้) — ห้ามแก้ระบบหลัก (daemon/godot/shell) ตรง ๆ เพราะจะทำให้โปรแกรมพัง.`;
 
-// Meeting templates fill the launcher (topic + discussion depth). Pure data —
-// the overlay maps them to a <select>; they never change phase structure.
+// Meeting templates fill the launcher. `rounds` means discussion rounds AFTER
+// the fixed opening round, so total agent turns = participants * (1 + rounds).
+// The overlay displays that arithmetic before the owner starts the meeting.
 const MEETING_TEMPLATES = [
   { id: "standup",       label: "Standup",       topic: "Standup: what you did / will do / blockers", rounds: 1 },
   { id: "retro",         label: "Retro",         topic: "Retro: what went well / badly / to improve", rounds: 2 },
@@ -4151,6 +4233,60 @@ function buildMeetingContext(topic, ids) {
   return { projectBlurb, memory };
 }
 
+function meetingSummaryEntry(meeting) {
+  const log = Array.isArray(meeting && meeting.log) ? meeting.log : [];
+  return log.find((m) => m && (m.isSummary || m.phase === "summary")) || null;
+}
+
+function meetingSearchText(meeting, summary) {
+  const agents = (meeting.agents || []).map((id) => {
+    const a = reg.agents && reg.agents[id];
+    return [id, a && a.name, a && a.role].filter(Boolean).join(" ");
+  }).join(" ");
+  return [
+    meeting.key,
+    meeting.title,
+    new Date(meeting.ts || Date.now()).toISOString(),
+    agents,
+    summary && summary.text,
+  ].filter(Boolean).join("\n").toLowerCase();
+}
+
+function listMeetingSummaries({ q = "", keys = [], limit = 20 } = {}) {
+  const wanted = new Set((keys || []).map(String).filter(Boolean));
+  const needle = String(q || "").trim().toLowerCase();
+  const out = [];
+  for (const meeting of (sess["@group"] || [])) {
+    if (!meeting || !meeting.key) continue;
+    if (wanted.size && !wanted.has(String(meeting.key))) continue;
+    const summary = meetingSummaryEntry(meeting);
+    if (!summary || !summary.text) continue;
+    if (needle && !meetingSearchText(meeting, summary).includes(needle)) continue;
+    out.push({
+      key: meeting.key,
+      title: meeting.title || meeting.key,
+      ts: meeting.ts || 0,
+      date: new Date(meeting.ts || Date.now()).toISOString(),
+      agents: Array.isArray(meeting.agents) ? meeting.agents.slice() : [],
+      summary: String(summary.text),
+    });
+  }
+  out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return out.slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)));
+}
+
+function buildSelectedMeetingHistory(keys) {
+  const ids = (keys || []).map(String).filter(Boolean).slice(0, 5);
+  if (!ids.length) return "";
+  const picked = listMeetingSummaries({ keys: ids, limit: 5 });
+  if (!picked.length) return "";
+  return "Relevant prior meeting summaries selected by the owner:\n" +
+    picked.map((m, i) => {
+      const names = (m.agents || []).map((id) => (reg.agents[id] || { name: id }).name).join(", ");
+      return `${i + 1}. Meeting: ${m.title}\nDate: ${m.date}\nParticipants: ${names}\nSummary:\n${m.summary.slice(0, 1800)}`;
+    }).join("\n\n");
+}
+
 // Dynamic sliding window: enough turns to stay grounded, capped so a long
 // meeting never feeds the whole transcript to every call. The cap (20) only
 // bites around ~96 messages — a safety ceiling, not the common case.
@@ -4169,7 +4305,10 @@ async function generateMeetingSummary(entry, ids) {
   const prompt =
     `You are the secretary summarizing a just-finished team meeting.\n` +
     `Topic: ${entry.title}\nParticipants: ${names}\n\nTranscript:\n${transcript}\n\n` +
-    `Write a concise markdown summary with sections: ## Summary, ## Decisions, ## Open Questions.\n` +
+    `Language rule: write the markdown summary and each action item's text in the meeting's primary language. ` +
+    `If the transcript is mostly Chinese, write Chinese. If languages are mixed, follow the topic and the majority of participant messages.\n` +
+    `Write a concise markdown summary with sections: ## Summary, ## Decisions, ## Conclusion, ## Open Questions.\n` +
+    `Conclusion must be explicit: state the meeting's final position, unresolved blockers, and next decision point.\n` +
     `Then output ONE fenced block of JSON — an array of action items, each ` +
     `{ "owner": "<one of: ${roster}>", "text": "<the follow-up>", "due": "<optional>" }.\n` +
     `Only use owners from the list above. If there are no action items, output [].\n` +
@@ -4193,15 +4332,18 @@ async function generateMeetingSummary(entry, ids) {
   return { summary, actions };
 }
 
-async function runDiscussion(ids, topic, rounds, social, preKey) {
+async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
   activeDiscussions++;
   const task = "disc" + (Date.now() % 100000);
+  const discussionRounds = Math.max(1, Number(rounds) || 2);
   // Every meeting is a persistent GROUP session ("@group" bucket): topic,
   // participants and the full transcript — readable later from the thread
   // menu, and written to workspace/meetings/ so agents can grep it too.
   const entry = { key: preKey || ("g" + Date.now()), sid: null, ts: Date.now(),
     title: String(topic).replace(/\s+/g, " ").slice(0, 60),
-    agents: ids.slice(), task, log: [] };
+    agents: ids.slice(), task, rounds: discussionRounds,
+    expectedTurns: ids.length * (social ? discussionRounds : (1 + discussionRounds)),
+    log: [] };
   sess["@group"] = sess["@group"] || [];
   sess["@group"].push(entry);
   saveSess();
@@ -4212,12 +4354,15 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
   broadcast({ type: "collab.started", agents: ids, task, text: topic, session: entry.key });
   broadcast({ type: "meeting.live", session: entry.key, topic: entry.title, agents: ids });
   // Build grounding context once. projectBlurb is shared; memory[id] is private.
-  const ctx = social ? { projectBlurb: "", memory: {} } : buildMeetingContext(topic, ids);
+  const ctx = social ? { projectBlurb: "", memory: {}, meetingHistory: "" } : {
+    ...buildMeetingContext(topic, ids),
+    meetingHistory: buildSelectedMeetingHistory(opts.historyMeetings || []),
+  };
   // Phases: social collapses to one `chat` phase (PROPOSAL block still fires).
   const phases = social
-    ? [{ name: "chat", instruction: "", rounds: rounds || 1 }]
+    ? [{ name: "chat", instruction: "", rounds: discussionRounds }]
     : [{ name: "opening", instruction: OPENING_INSTRUCTION, rounds: 1 },
-       { name: "discussion", instruction: DISCUSSION_INSTRUCTION, rounds: Math.max(1, rounds || 2) }];
+       { name: "discussion", instruction: DISCUSSION_INSTRUCTION, rounds: discussionRounds }];
   try {
     outerPhase:
     for (const phase of phases) {
@@ -4251,6 +4396,7 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
             (a.prompt ? `Your persona: ${a.prompt}\n` : "") +
             `Meeting topic: ${topic}\n` +
             (ctx.projectBlurb && isOpening ? `${ctx.projectBlurb}\n` : "") +
+            (ctx.meetingHistory && isOpening ? `${ctx.meetingHistory}\n` : "") +
             (isOpening && ctx.memory[id] ? `Your private memory (only you see this):\n${ctx.memory[id]}\n` : "") +
             (recent ? `Recent discussion:\n${recent}\n` : "You open the meeting.\n") +
             `Phase: ${phase.name}. ` +
@@ -4260,7 +4406,7 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
             `และตอบกลับเป็นข้อความสนทนาตามปกติ.` +
             (social ? SOCIAL_PROPOSAL_INSTRUCTION : ""),
             { tools: social ? "" : "WebSearch,WebFetch,Read,Glob,Grep", provider: a && a.provider, model: a && a.model, env: { OFFICE_AGENT: id, OFFICE_TASK: task } });
-          let line = text.split("\n").filter(Boolean).join(" ").slice(0, 500);
+          let line = text.split("\n").map((s) => s.trim()).filter(Boolean).join("\n");
           // If the owner pressed End while this claude call was in flight, drop the
           // lagging reply entirely — otherwise it would surface as a ghost message
           // AFTER meeting.ended has already fired and the summary has been written
@@ -4295,6 +4441,35 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
       summary = "(summary generation failed)";
       actions = [];
     }
+    if (summary) {
+      const already = entry.log.some((m) => m && m.phase === "summary");
+      if (!already) {
+        entry.log.push({ who: "main", text: summary, ts: Date.now(), phase: "summary", isSummary: true });
+        saveSess();
+        broadcast({ type: "chat.message", agent: "main", task, text: summary,
+          session: entry.key, phase: "summary", isSummary: true });
+        for (const id of ids) {
+          const ownLines = entry.log
+            .filter((m) => m && m.who === id && m.text)
+            .slice(0, 4)
+            .map((m) => `- [${m.phase || "chat"}] ${String(m.text).slice(0, 500)}`)
+            .join("\n");
+          appendSessionNote(id, [
+            `🗣 Meeting trace: ${entry.title}`,
+            ownLines ? `\nYour contributions:\n${ownLines}` : "",
+            `\nSummary:\n${summary}`,
+          ].join("\n").trim(), {
+            who: "main",
+            phase: "meeting-summary",
+            isSummary: true,
+            meeting: entry.key,
+            meetingTitle: entry.title,
+            agents: ids,
+          });
+        }
+        saveSess();
+      }
+    }
     // Always attempt to save and broadcast action items, even if summary failed
     try {
       if (actions.length) {
@@ -4313,9 +4488,13 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
       fs.mkdirSync(dir, { recursive: true });
       const names = ids.map((id) => (reg.agents[id] || { name: id }).name).join(", ");
       const summaryBlock = summary ? `## Summary\n\n${summary}\n\n## Transcript\n\n` : "";
+      const transcript = entry.log
+        .filter((m) => !m.isSummary && m.phase !== "summary")
+        .map((m) => `**[${m.phase || "chat"}] ${(reg.agents[m.who] || { name: m.who }).name}**: ${m.text}`).join("\n\n");
       const md = `# Meeting: ${entry.title}\n\n- Date: ${new Date(entry.ts).toISOString()}\n` +
-        `- Participants: ${names}\n\n${summaryBlock}` +
-        entry.log.map((m) => `**[${m.phase || "chat"}] ${(reg.agents[m.who] || { name: m.who }).name}**: ${m.text}`).join("\n\n") + "\n";
+        `- Participants: ${names}\n- Discussion rounds: ${entry.rounds || ""}\n` +
+        `- Expected turns: ${entry.expectedTurns || ""}\n\n${summaryBlock}` +
+        transcript + "\n";
       fs.writeFileSync(path.join(dir, `${entry.key}.md`), md);
       try { if (retrievalOk) { retrieval.addDoc("arch", "meeting", `arch:meeting:${entry.key}`, md.slice(0, 1200)); retrieval.persist(); } } catch {}
     } catch (e) { console.error("[meeting] minutes write failed:", e && e.message); }
@@ -4525,26 +4704,32 @@ const server = http.createServer((req, res) => {
         // directly gives him the same dispatch power. New threads adopt the
         // requested project workspace.
         const mention = parseAgentMentionShortcut(origPrompt, reg.agents);
+        let entryKey = "";
+        const captureEntry = (key) => { entryKey = key || entryKey; };
         const task = mention
           ? mentionShortcutFlow(origPrompt, mention, session, project,
               { logPrompt: voice ? "🎤👑 " + origPrompt : origPrompt,
+                onEntry: captureEntry,
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
           : agent === "ceo"
             ? ceoFlow(prompt, session, project,
               { logPrompt: voice ? "🎤👑 (voice order) " + origPrompt : origPrompt,
                 relay: true,  // mirror the CEO conversation to connected channels
+                onEntry: captureEntry,
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
             : agent === "main"
               ? runClaude("main", prompt + directorNote(),
                 { session, project, logPrompt: origPrompt,
+                  onEntry: captureEntry,
                   filterText: makeDelegateFilter(0, session),
                   onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
               : runClaude(agent, prompt, { session, project, logPrompt: origPrompt,
                 resumable: true, resumePrompt: origPrompt,  // a member's direct task auto-resumes
+                onEntry: captureEntry,
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined });
         if (!wait) {
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ task }));
+          res.end(JSON.stringify({ task, session: entryKey }));
         }
       } catch (e) {
         res.writeHead(400);
@@ -4682,7 +4867,8 @@ const server = http.createServer((req, res) => {
       const lu = latest && latest.lastUsage;
       const usage = lu ? { in: lu.in, out: lu.out, win: lu.win,
         pct: lu.win ? Math.min(100, Math.round(lu.in / lu.win * 100)) : 0, ts: lu.ts } : null;
-      agents.push({ id, name: a.name, role: a.role, provider: p, model: a.model || "", tag: modelTag(id), usage });
+      agents.push({ id, name: a.name, role: a.role, provider: p, model: a.model || "",
+        runtime: runtimeConfig.effectiveAgentRuntime(reg, id), tag: modelTag(id), usage });
       (byProvider[p] = byProvider[p] || []).push(id);
     }
     const ids = Array.from(new Set([...KNOWN, ...Object.keys(pc)]));
@@ -4706,10 +4892,13 @@ const server = http.createServer((req, res) => {
         if (bad) throw new Error("unknown agent: " + bad);
         if (ids.length < 2) throw new Error("need at least 2 agents");
         if (!p.topic) throw new Error("no topic");
+        const historyMeetings = Array.isArray(p.historyMeetings)
+          ? p.historyMeetings.map((x) => String(x)).filter(Boolean).slice(0, 5)
+          : [];
         // Concurrent meetings are allowed — disjoint teams huddle in parallel,
         // and the wallpaper ghost-splits anyone double-booked.
         const mkey = "g" + Date.now();
-        runDiscussion(ids, String(p.topic), Math.min(Math.max(Number(p.rounds) || 2, 1), 3), false, mkey);
+        runDiscussion(ids, String(p.topic), Math.min(Math.max(Number(p.rounds) || 2, 1), 6), false, mkey, { historyMeetings });
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true, session: mkey }));
       } catch (e) {
@@ -4717,6 +4906,18 @@ const server = http.createServer((req, res) => {
         res.end(String(e.message));
       }
     });
+
+  } else if (req.method === "GET" && req.url.startsWith("/meetings/search")) {
+    const u = new URL(req.url, "http://x");
+    const q = u.searchParams.get("q") || "";
+    const limit = parseInt(u.searchParams.get("limit") || "20", 10) || 20;
+    const meetings = listMeetingSummaries({ q, limit }).map((m) => ({
+      ...m,
+      names: (m.agents || []).map((id) => (reg.agents[id] || { name: id }).name),
+      summary: m.summary.slice(0, 2400),
+    }));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ q, meetings }));
 
   } else if (req.method === "POST" && req.url === "/discuss/message") {
     // Owner speaks into a LIVE meeting. No async chain, no per-agent claudeText:
@@ -4728,7 +4929,7 @@ const server = http.createServer((req, res) => {
         const { session, text } = JSON.parse(body);
         const live = activeMeetings.get(session);
         if (!live) { res.writeHead(404); return res.end("meeting not live"); }
-        const msg = String(text || "").trim().slice(0, 1000);
+        const msg = String(text || "").trim();
         if (!msg) throw new Error("empty message");
         live.entry.log.push({ who: "ceo", text: msg, ts: Date.now(), phase: "user" });
         saveSess();
