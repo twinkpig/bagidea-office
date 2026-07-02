@@ -29,7 +29,18 @@ const DAEMON_DIR = path.join(__dirname, "..");   // the real daemon/ we're testi
 const CLAUDE_STUB = `#!/usr/bin/env node
 let s = ""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => {
   const reply = () => {
+    if (/timeout retry check/i.test(s)) {
+      const attempt = Number(process.env.OFFICE_MEETING_RETRY_ATTEMPT || 0);
+      process.stdout.write(attempt > 0
+        ? "Retry response: concise contribution after the slow turn timed out."
+        : "Slow first attempt should not be accepted.");
+      return;
+    }
     if (/secretary/i.test(s)) {
+      if (/empty summary fallback check/i.test(s)) {
+        process.stdout.write("\\n");
+        return;
+      }
       if (/中文总结语言检查/.test(s)) {
         const chinese = /meeting's primary language|primary language/i.test(s);
         process.stdout.write(
@@ -48,7 +59,11 @@ let s = ""; process.stdin.on("data", c => s += c); process.stdin.on("end", () =>
         " {\\"owner\\":\\"bogus\\",\\"text\\":\\"should be dropped (unknown owner)\\",\\"due\\":\\"\\"}]" +
         "\\n\`\`\`\\n");
     } else {
-      if (/long transcript/i.test(s)) {
+      if (/meeting host opening/i.test(s)) {
+        process.stdout.write("Host opening: agenda set and first question framed.");
+      } else if (/meeting host facilitation/i.test(s)) {
+        process.stdout.write("Host facilitation: synthesizing the round and directing the next focus.");
+      } else if (/long transcript/i.test(s)) {
         process.stdout.write("Long transcript line: " + "detail ".repeat(180));
       } else if (/historical context check/i.test(s)) {
         process.stdout.write(/Relevant prior meeting summaries selected by the owner:/i.test(s)
@@ -69,6 +84,10 @@ let s = ""; process.stdin.on("data", c => s += c); process.stdin.on("end", () =>
   };
   // Optional artificial delay so tests can exercise End-during-a-turn.
   const delay = Number(process.env.OFFICE_TEST_SLOW_MS || 0);
+  if (/timeout retry check/i.test(s) && !process.env.OFFICE_MEETING_RETRY_ATTEMPT) {
+    setTimeout(reply, Number(process.env.OFFICE_TEST_TIMEOUT_RETRY_SLOW_MS || 250));
+    return;
+  }
   if (delay) setTimeout(reply, delay); else reply();
 });
 `;
@@ -101,7 +120,8 @@ async function bootIsolated(opts = {}) {
   // Private memory for nida only — proves memory injection is per-agent.
   fs.writeFileSync(path.join(ws, "memory", "nida.md"), "Nida remembers: prefer tests.");
   // The daemon reads registry.json from its OWN dir (daemon/registry.json).
-  fs.writeFileSync(path.join(tmp, "daemon", "registry.json"), JSON.stringify(stubRegistry()));
+  const registry = { ...stubRegistry(), ...(opts.registry || {}) };
+  fs.writeFileSync(path.join(tmp, "daemon", "registry.json"), JSON.stringify(registry));
   if (opts.backfillFixture) {
     const meetDir = path.join(ws, "meetings");
     const now = Date.now();
@@ -291,6 +311,14 @@ test("on end the meeting writes summary minutes + a validated .actions.json", as
     assert.ok(trace, "participant thread must retain a meeting trace linked to the group meeting");
     assert.match(trace.text, /Meeting trace:/);
     assert.match(trace.text, /Your contributions:/);
+    const ceoSessions = await req(d.url, "GET", `/sessions?agent=${encodeURIComponent("ceo")}`);
+    assert.ok(ceoSessions.data.sessions.length, "CEO should receive a visible meeting report thread");
+    const ceoLog = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("ceo")}&key=${encodeURIComponent(ceoSessions.data.sessions[0].key)}`);
+    const ceoReport = ceoLog.data.log.find((m) => m.phase === "meeting-summary" && m.meeting === session);
+    assert.ok(ceoReport, "CEO thread must receive the final meeting report");
+    assert.match(ceoReport.text, /Meeting report:/);
+    assert.match(ceoReport.text, /Summary:/);
   } finally { d.stop(); }
   // The daemon is stopped, but the meeting artifacts live on disk under tmp.
   const meetDir = path.join(d.tmp, "workspace", "meetings");
@@ -307,6 +335,43 @@ test("on end the meeting writes summary minutes + a validated .actions.json", as
     "unknown owners must be rejected: " + JSON.stringify(actions));
   assert.ok(actions.every((a) => a.meeting === session && a.status === "open"),
     "every action item must reference the meeting + be open");
+});
+
+test("meetings default to main as host and host opens/facilitates/summarizes", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "meeting host opening and meeting host facilitation", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const session = r.data.session;
+    const log = await waitForMessages(d.url, session, 4);
+    assert.strictEqual(log.host, "main", "default meeting host should be main");
+    assert.strictEqual(log.agents.includes("main"), false, "host is not a participant");
+    assert.ok(log.log.some((m) => m.who === "main" && m.phase === "host-opening"),
+      "host must open the meeting before participant turns");
+    assert.ok(log.log.some((m) => m.who === "main" && m.phase === "host-facilitation"),
+      "host must facilitate after a discussion round");
+    await req(d.url, "POST", "/discuss/control", { session, action: "end" });
+    const final = await waitForEnd(d.url, session);
+    const summary = final.log.find((m) => m.isSummary && m.phase === "summary");
+    assert.ok(summary, "summary must exist");
+    assert.strictEqual(summary.who, "main", "summary must be attributed to the host");
+  } finally { d.stop(); }
+});
+
+test("meetings accept a custom host without adding it to participants", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { host: "ton", agents: ["nida", "ton"], topic: "meeting host opening", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const session = r.data.session;
+    const log = await waitForMessages(d.url, session, 3);
+    assert.strictEqual(log.host, "ton", "custom host should be recorded");
+    assert.deepStrictEqual(log.agents, ["nida"], "custom host should be removed from participant list");
+    assert.ok(log.log.some((m) => m.who === "ton" && m.phase === "host-opening"),
+      "custom host must open the meeting");
+  } finally { d.stop(); }
 });
 
 test("meeting transcript stores full long lines instead of truncating them", async () => {
@@ -338,6 +403,24 @@ test("meeting summary uses the meeting's primary language", async () => {
     assert.ok(summary, "summary must be present");
     assert.match(summary.text, /团队使用中文完成了讨论/);
     assert.doesNotMatch(summary.text, /discussed in English/);
+  } finally { d.stop(); }
+});
+
+test("meeting writes a fallback summary when the secretary returns empty text", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "empty summary fallback check", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const session = r.data.session;
+    await waitForMessages(d.url, session, 2);
+    await req(d.url, "POST", "/discuss/control", { session, action: "end" });
+    const final = await waitForEnd(d.url, session);
+    const summary = final.log.find((m) => m.isSummary && m.phase === "summary");
+    assert.ok(summary, "summary fallback must be present when secretary returns empty text");
+    assert.match(summary.text, /## Summary/);
+    assert.match(summary.text, /Fallback Summary|自动兜底总结/);
+    assert.match(summary.text, /Nida|Ton/);
   } finally { d.stop(); }
 });
 
@@ -385,6 +468,15 @@ test("legacy meeting backfill merges historical follow-up drafts into summary no
     assert.ok(note, "participant trace must be backfilled");
     assert.match(note.text, /Follow-up Drafts|会议跟进项草案/);
     assert.match(note.text, /write the backfill test/);
+
+    const ceoSessions = await req(d.url, "GET", `/sessions?agent=${encodeURIComponent("ceo")}`);
+    assert.ok(ceoSessions.data.sessions.length, "CEO should receive a backfilled meeting report");
+    const ceo = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("ceo")}&key=${encodeURIComponent(ceoSessions.data.sessions[0].key)}`);
+    const ceoNote = ceo.data.log.find((m) => m.phase === "meeting-summary" && m.meeting === "legacy-meeting");
+    assert.ok(ceoNote, "CEO meeting report must be backfilled");
+    assert.match(ceoNote.text, /Meeting report:/);
+    assert.match(ceoNote.text, /Legacy summary only/);
   } finally { d.stop(); }
 });
 
@@ -405,6 +497,22 @@ test("meeting turn prompts lock one language and avoid Thai control text", async
       "Chinese meeting prompts should lock Simplified Chinese");
     assert.ok(!log.log.some((m) => /Meeting prompt leaked multilingual control text/.test(m.text)),
       "multilingual control instructions must not leak into ordinary meeting prompts");
+  } finally { d.stop(); }
+});
+
+test("meeting turn timeout is configurable and retries once with a concise fallback prompt", async () => {
+  const d = await bootIsolated({
+    registry: { meetingTurnTimeoutMs: 120, meetingTurnRetryTimeoutMs: 200 },
+  });
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida"], topic: "timeout retry check", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const log = await waitForMessages(d.url, r.data.session, 2, 5000);
+    assert.ok(log.log.some((m) => /Retry response: concise contribution/.test(m.text)),
+      "timed-out meeting turn should retry once and keep the meeting moving");
+    assert.ok(!log.log.some((m) => /failed to respond: timeout after/.test(m.text)),
+      "a successful retry should not be recorded as a failed turn");
   } finally { d.stop(); }
 });
 

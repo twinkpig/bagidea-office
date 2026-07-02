@@ -117,6 +117,10 @@ function loadReg() {
     configured: Object.prototype.hasOwnProperty.call(reg, "claudeUseWsl") ? reg.claudeUseWsl : undefined,
   });
   reg.claudeWslDistro = String(reg.claudeWslDistro || "").trim().slice(0, 80);
+  reg.codexUseWsl = codexRuntime.defaultUseWsl({
+    configured: Object.prototype.hasOwnProperty.call(reg, "codexUseWsl") ? reg.codexUseWsl : undefined,
+  });
+  reg.codexWslDistro = String(reg.codexWslDistro || "").trim().slice(0, 80);
   for (const r of reg.roles) if (!reg.roleProfiles[r]) reg.roleProfiles[r] = {};
   reg.skills = reg.skills || {};
   // Seed / refresh the builtin starter library. We own entries flagged
@@ -539,6 +543,25 @@ function combineSummaryAndDrafts(summary, actions) {
   return `${s}\n\n${d}`;
 }
 
+function meetingReportText(meeting, summaryText) {
+  if (!meeting || !summaryText) return "";
+  const hostId = meeting.host || "";
+  const host = hostId && reg.agents && reg.agents[hostId]
+    ? (reg.agents[hostId].name || hostId)
+    : "Director";
+  const participants = (meeting.agents || [])
+    .map((id) => ((reg.agents && reg.agents[id]) || { name: id }).name || id)
+    .join(", ");
+  return [
+    `🗣 Meeting report: ${meeting.title || meeting.key}`,
+    `Meeting: ${meeting.key}`,
+    `Host: ${host}`,
+    participants ? `Participants: ${participants}` : "",
+    "",
+    `Summary:\n${summaryText}`,
+  ].filter(Boolean).join("\n").trim();
+}
+
 function backfillMeetingSummaries() {
   let changed = false;
   for (const meeting of sess["@group"] || []) {
@@ -569,6 +592,15 @@ function backfillMeetingSummaries() {
         agents: meeting.agents,
       })) changed = true;
     }
+    const ceoReport = meetingReportText(meeting, mergedSummary || summary.text || "");
+    if (ceoReport && upsertSessionNote("ceo", ceoReport, {
+      who: meeting.host || "main",
+      phase: "meeting-summary",
+      isSummary: true,
+      meeting: meeting.key,
+      meetingTitle: meeting.title,
+      agents: meeting.agents,
+    })) changed = true;
   }
   if (changed) saveSess();
 }
@@ -887,10 +919,42 @@ function claudeText(prompt, opts = {}) {
     child.stdin.write(prompt);
     child.stdin.end();
     let out = "";
+    let err = "";
+    let settled = false;
+    const configuredTimeoutMs = Number(opts.timeoutMs || 0) || 0;
+    const timeoutMs = configuredTimeoutMs > 0 ? configuredTimeoutMs : 0;
+    const finish = (text, meta = {}) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (meta.error && opts.returnMeta) return resolve({ text: String(text || "").trim(), ...meta });
+      if (opts.returnMeta) return resolve({ text: String(text || "").trim(), ...meta });
+      resolve(String(text || "").trim());
+    };
+    const timer = timeoutMs ? setTimeout(() => {
+      const reason = `timeout after ${Math.round(timeoutMs / 1000)}s`;
+      try { killTree(child); } catch { try { child.kill(); } catch {} }
+      finish(out, { error: true, reason, stderr: err.trim() });
+    }, timeoutMs) : null;
     child.stdout.setEncoding("utf8");   // multibyte-safe across chunk boundaries (Thai etc.)
     child.stdout.on("data", (c) => (out += c));
-    child.on("close", () => resolve(out.trim()));
-    child.on("error", () => resolve(""));
+    child.stderr && child.stderr.setEncoding && child.stderr.setEncoding("utf8");
+    child.stderr && child.stderr.on("data", (c) => {
+      err += c;
+      if (err.length > 8000) err = err.slice(-8000);
+    });
+    child.on("close", (code) => {
+      const clean = out.trim();
+      const stderr = err.trim();
+      if (!clean && (code || stderr)) return finish("", {
+        error: true,
+        reason: stderr || `process exited with code ${code}`,
+        code,
+        stderr,
+      });
+      finish(clean, { code, stderr });
+    });
+    child.on("error", (e) => finish("", { error: true, reason: e && e.message || "spawn error", stderr: err.trim() }));
   });
 }
 
@@ -4387,19 +4451,153 @@ function meetingTurnLanguageRule(lang) {
   return `Language rule: reply only in ${lang}. Do not switch to Thai, Japanese, English, or any other language unless directly quoting source text or a proper noun.`;
 }
 
+function meetingFailureLine(agentId, info) {
+  const a = (reg.agents && reg.agents[agentId]) || { name: agentId };
+  const reason = String((info && info.reason) || "model call failed").replace(/\s+/g, " ").trim();
+  return `⚠️ ${a.name || agentId} failed to respond: ${reason.slice(0, 360)}`;
+}
+
+function meetingTurnTimeoutMs(social) {
+  if (social) return 60000;
+  const configured = Number(reg.meetingTurnTimeoutMs || 0);
+  return configured > 0 ? configured : 420000;
+}
+
+function meetingTurnRetryTimeoutMs(social) {
+  if (social) return 0;
+  const configured = Number(reg.meetingTurnRetryTimeoutMs || 0);
+  return configured > 0 ? configured : 90000;
+}
+
+function isTimeoutResult(result) {
+  return !!(result && result.error && /timeout after/i.test(String(result.reason || "")));
+}
+
+async function meetingClaudeText(prompt, agentId, agent, task, social, opts = {}) {
+  const tools = social || opts.concise ? "" : "WebSearch,WebFetch,Read,Glob,Grep";
+  const result = await claudeText(prompt, {
+    tools,
+    provider: agent && agent.provider,
+    model: agent && agent.model,
+    env: {
+      OFFICE_AGENT: agentId,
+      OFFICE_TASK: task,
+      ...(opts.retry ? { OFFICE_MEETING_RETRY_ATTEMPT: String(opts.retry) } : {}),
+    },
+    timeoutMs: opts.timeoutMs || meetingTurnTimeoutMs(social),
+    returnMeta: true,
+  });
+  if (!isTimeoutResult(result) || opts.retry || social) return result;
+  const retryTimeout = meetingTurnRetryTimeoutMs(social);
+  if (!retryTimeout) return result;
+  return claudeText(
+    prompt +
+      "\n\nYour previous meeting turn timed out. Reply now without tools. " +
+      "Give one concise contribution in the required meeting language, max 5 sentences.",
+    {
+      tools: "",
+      provider: agent && agent.provider,
+      model: agent && agent.model,
+      env: { OFFICE_AGENT: agentId, OFFICE_TASK: task, OFFICE_MEETING_RETRY_ATTEMPT: "1" },
+      timeoutMs: retryTimeout,
+      returnMeta: true,
+    });
+}
+
+function resolveMeetingHost(rawHost) {
+  const wanted = String(rawHost || "").trim();
+  if (wanted && wanted !== "ceo" && reg.agents && reg.agents[wanted]) return wanted;
+  if (reg.agents && reg.agents.main) return "main";
+  return "";
+}
+
+async function meetingHostTurn(entry, hostId, topic, phase, instruction, ctx, task, social) {
+  if (!hostId || !reg.agents || !reg.agents[hostId]) return "";
+  const host = reg.agents[hostId] || { name: hostId, role: "Director", prompt: "" };
+  const win = windowSize((entry.log || []).length);
+  const recent = (entry.log || []).slice(-win)
+    .map((m) => `${(reg.agents[m.who] || { name: m.who }).name}: ${m.text}`).join("\n");
+  const lang = meetingLanguageName(topic, recent);
+  const prompt =
+    `You are "${host.name}" (${host.role}) hosting a ${social ? "casual break-room chat" : "team meeting"} at the office.\n` +
+    (host.prompt ? `Your persona: ${host.prompt}\n` : "") +
+    `Meeting topic: ${topic}\n` +
+    `${meetingTurnLanguageRule(lang)}\n` +
+    (ctx && ctx.projectBlurb && phase === "host-opening" ? `${ctx.projectBlurb}\n` : "") +
+    (ctx && ctx.meetingHistory && phase === "host-opening" ? `${ctx.meetingHistory}\n` : "") +
+    (recent ? `Recent discussion:\n${recent}\n` : "No one has spoken yet.\n") +
+    `Phase: ${phase}. ${instruction}\n` +
+    `Reply as the host only. Keep it concise and concrete.`;
+  const result = await meetingClaudeText(prompt, hostId, host, task, social);
+  const text = result && typeof result === "object" ? (result.text || "") : String(result || "");
+  if (result && result.error) return meetingFailureLine(hostId, result);
+  return text.split("\n").map((s) => s.trim()).filter(Boolean).join("\n");
+}
+
+function fallbackMeetingSummary(entry, ids, reason = "summary model returned empty") {
+  const transcript = Array.isArray(entry && entry.log) ? entry.log : [];
+  const lang = meetingLanguageName(entry && entry.title, transcript.map((m) => m && m.text).join("\n"));
+  const participants = (ids || [])
+    .map((id) => ((reg.agents && reg.agents[id]) || { name: id }).name || id)
+    .join(", ");
+  const nonSummary = transcript.filter((m) => m && !m.isSummary && m.phase !== "summary" && m.text);
+  const last = nonSummary.slice(-4).map((m) => {
+    const name = ((reg.agents && reg.agents[m.who]) || { name: m.who }).name || m.who;
+    return `- ${name}: ${String(m.text || "").replace(/\s+/g, " ").slice(0, 220)}`;
+  }).join("\n");
+  const topic = String((entry && entry.title) || "").trim() || "meeting";
+  if (lang === "Simplified Chinese") {
+    return [
+      "## Summary",
+      `自动兜底总结：会议总结模型未返回内容（${reason}），系统已根据会议记录保留本次会议结论痕迹。`,
+      `主题：${topic}`,
+      `参与者：${participants || "无"}`,
+      last ? `最近发言：\n${last}` : "最近发言：无",
+      "",
+      "## Decisions",
+      "以会议原始记录为准；本次没有生成额外自动决策。",
+      "",
+      "## Conclusion",
+      "会议已结束，但模型总结为空；请查看上方发言记录确认最终判断。",
+      "",
+      "## Open Questions",
+      "需要人工复核本次会议结论，或重新触发总结。"
+    ].join("\n");
+  }
+  return [
+    "## Summary",
+    `Fallback Summary: the meeting secretary returned no text (${reason}), so the system preserved this deterministic summary from the transcript.`,
+    `Topic: ${topic}`,
+    `Participants: ${participants || "none"}`,
+    last ? `Recent contributions:\n${last}` : "Recent contributions: none",
+    "",
+    "## Decisions",
+    "Use the original transcript as the source of truth; no additional automatic decision was generated.",
+    "",
+    "## Conclusion",
+    "The meeting ended, but the model summary was empty; review the transcript above for the final position.",
+    "",
+    "## Open Questions",
+    "Manual review or a regenerated summary may be needed."
+  ].join("\n");
+}
+
 // Summarize a finished meeting in ONE call: markdown minutes + a fenced JSON
 // actionItems[] array. Owners are validated against the roster (unknown owners
 // are dropped — better a missing item than a phantom assignee). Returns
 // { summary, actions } where either may be "" / [] if the model declines.
-async function generateMeetingSummary(entry, ids) {
+async function generateMeetingSummary(entry, ids, hostId = "") {
   const names = ids.map((id) => `${id} (${(reg.agents[id] || { name: id }).name})`).join(", ");
+  const hostLine = hostId && reg.agents && reg.agents[hostId]
+    ? `Host: ${hostId} (${reg.agents[hostId].name})\n`
+    : "";
   const transcript = entry.log
     .map((m) => `[${m.phase || "chat"}] ${(reg.agents[m.who] || { name: m.who }).name}: ${m.text}`)
     .join("\n");
   const roster = ids.join(", ");
   const prompt =
     `You are the secretary summarizing a just-finished team meeting.\n` +
-    `Topic: ${entry.title}\nParticipants: ${names}\n\nTranscript:\n${transcript}\n\n` +
+    `Topic: ${entry.title}\n${hostLine}Participants: ${names}\n\nTranscript:\n${transcript}\n\n` +
     `Language rule: write the markdown summary and each action item's text in the meeting's primary language. ` +
     `If the transcript is mostly Chinese, write Chinese. If languages are mixed, follow the topic and the majority of participant messages.\n` +
     `Write a concise markdown summary with sections: ## Summary, ## Decisions, ## Conclusion, ## Open Questions.\n` +
@@ -4431,13 +4629,16 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
   activeDiscussions++;
   const task = "disc" + (Date.now() % 100000);
   const discussionRounds = Math.max(1, Number(rounds) || 2);
+  const hostId = social ? "" : resolveMeetingHost(opts.host);
+  const participants = hostId ? ids.filter((id) => id !== hostId) : ids.slice();
   // Every meeting is a persistent GROUP session ("@group" bucket): topic,
   // participants and the full transcript — readable later from the thread
   // menu, and written to workspace/meetings/ so agents can grep it too.
   const entry = { key: preKey || ("g" + Date.now()), sid: null, ts: Date.now(),
     title: String(topic).replace(/\s+/g, " ").slice(0, 60),
-    agents: ids.slice(), task, rounds: discussionRounds,
-    expectedTurns: ids.length * (social ? discussionRounds : (1 + discussionRounds)),
+    agents: participants.slice(), host: hostId || undefined, task, rounds: discussionRounds,
+    expectedTurns: participants.length * (social ? discussionRounds : (1 + discussionRounds)) +
+      (hostId && !social ? 1 + discussionRounds : 0),
     log: [] };
   sess["@group"] = sess["@group"] || [];
   sess["@group"].push(entry);
@@ -4446,11 +4647,11 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
   // shared object the loop re-reads every turn; /discuss/control mutates it.
   const ctrl = { paused: false, ended: false, pausedAt: 0 };
   activeMeetings.set(entry.key, { entry, ctrl });
-  broadcast({ type: "collab.started", agents: ids, task, text: topic, session: entry.key });
-  broadcast({ type: "meeting.live", session: entry.key, topic: entry.title, agents: ids });
+  broadcast({ type: "collab.started", agents: participants, host: hostId || undefined, task, text: topic, session: entry.key });
+  broadcast({ type: "meeting.live", session: entry.key, topic: entry.title, agents: participants, host: hostId || undefined });
   // Build grounding context once. projectBlurb is shared; memory[id] is private.
   const ctx = social ? { projectBlurb: "", memory: {}, meetingHistory: "" } : {
-    ...buildMeetingContext(topic, ids),
+    ...buildMeetingContext(topic, participants),
     meetingHistory: buildSelectedMeetingHistory(opts.historyMeetings || []),
   };
   // Phases: social collapses to one `chat` phase (PROPOSAL block still fires).
@@ -4459,10 +4660,21 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
     : [{ name: "opening", instruction: OPENING_INSTRUCTION, rounds: 1 },
        { name: "discussion", instruction: DISCUSSION_INSTRUCTION, rounds: discussionRounds }];
   try {
-    outerPhase:
-    for (const phase of phases) {
-      for (let r = 0; r < phase.rounds; r++) {
-        for (const id of ids) {
+    outerPhase: {
+      if (hostId && !social) {
+        const line = await meetingHostTurn(entry, hostId, topic, "host-opening",
+          "Open the meeting for the participants: frame the agenda, state the decision needed, and invite the first participant. Max 3 sentences.",
+          ctx, task, social);
+        if (ctrl.ended) break outerPhase;
+        if (line) {
+          entry.log.push({ who: hostId, text: line, ts: Date.now(), phase: "host-opening", host: true, social: false });
+          saveSess();
+          broadcast({ type: "chat.message", agent: hostId, task, text: line, session: entry.key, phase: "host-opening", host: true, social: false });
+        }
+      }
+      for (const phase of phases) {
+        for (let r = 0; r < phase.rounds; r++) {
+          for (const id of participants) {
           // Re-fetch controls before each turn — End while paused must exit the
           // WHOLE meeting, not just the inner loop (hence the labeled break).
           if (ctrl.ended) break outerPhase;
@@ -4487,7 +4699,7 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
             .map((m) => `${(reg.agents[m.who] || { name: m.who }).name}: ${m.text}`).join("\n");
           const isOpening = phase.name === "opening";
           const meetingLang = meetingLanguageName(topic, recent);
-          const text = await claudeText(
+          const prompt =
             `You are "${a.name}" (${a.role}) in a ${social ? "casual break-room chat" : "team meeting"} at the office.\n` +
             (a.prompt ? `Your persona: ${a.prompt}\n` : "") +
             `Meeting topic: ${topic}\n` +
@@ -4499,14 +4711,24 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
             `Phase: ${phase.name}. ` +
             (social ? `Give YOUR next contribution as ${a.name}.` : phase.instruction) +
             `\nIf real-world facts are needed to make your point more reliable, use WebSearch, WebFetch, or Read only when genuinely necessary. Do not over-search. Reply as a normal meeting contribution.` +
-            (social ? SOCIAL_PROPOSAL_INSTRUCTION : ""),
-            { tools: social ? "" : "WebSearch,WebFetch,Read,Glob,Grep", provider: a && a.provider, model: a && a.model, env: { OFFICE_AGENT: id, OFFICE_TASK: task } });
+              (social ? SOCIAL_PROPOSAL_INSTRUCTION : "");
+          const result = await meetingClaudeText(prompt, id, a, task, social);
+          const text = result && typeof result === "object" ? (result.text || "") : String(result || "");
           let line = text.split("\n").map((s) => s.trim()).filter(Boolean).join("\n");
           // If the owner pressed End while this claude call was in flight, drop the
           // lagging reply entirely — otherwise it would surface as a ghost message
           // AFTER meeting.ended has already fired and the summary has been written
           // (transcript would then disagree with the minutes).
           if (ctrl.ended) break outerPhase;
+          if (result && result.error) {
+            const failLine = meetingFailureLine(id, result);
+            console.error("[meeting] turn failed:", entry.key, id, result.reason || result.stderr || result.code || "unknown");
+            entry.log.push({ who: id, text: failLine, ts: Date.now(), phase: phase.name, social: !!social, error: true });
+            saveSess();
+            broadcast({ type: "chat.message", agent: id, task, text: failLine,
+              session: entry.key, phase: phase.name, social: !!social, error: true });
+            continue;
+          }
           // PROPOSAL: a project pitch for the owner to approve — protocol, not prose.
           const pm = text.match(/PROPOSAL:\s*([^:]+?)\s*::\s*(.+)/);
           if (pm) {
@@ -4517,6 +4739,18 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
             entry.log.push({ who: id, text: line, ts: Date.now(), phase: phase.name, social: !!social });
             saveSess();
             broadcast({ type: "chat.message", agent: id, task, text: line, session: entry.key, phase: phase.name, social: !!social });
+          }
+        }
+          if (hostId && !social && phase.name === "discussion" && !ctrl.ended) {
+            const line = await meetingHostTurn(entry, hostId, topic, "host-facilitation",
+              "Synthesize the just-finished discussion round, point out the remaining tension, and direct the next focus. Max 3 sentences.",
+              ctx, task, social);
+            if (ctrl.ended) break outerPhase;
+            if (line) {
+              entry.log.push({ who: hostId, text: line, ts: Date.now(), phase: "host-facilitation", host: true, social: false });
+              saveSess();
+              broadcast({ type: "chat.message", agent: hostId, task, text: line, session: entry.key, phase: "host-facilitation", host: true, social: false });
+            }
           }
         }
       }
@@ -4530,19 +4764,23 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
     let summary = "", actions = [];
     try {
       ({ summary, actions } = social ? { summary: "", actions: [] }
-        : await generateMeetingSummary(entry, ids));
+        : await generateMeetingSummary(entry, participants, hostId));
     } catch (e) {
       console.error("[meeting] summary generation failed:", e && e.message);
-      summary = "(summary generation failed)";
+      summary = fallbackMeetingSummary(entry, participants, e && e.message ? String(e.message) : "summary generation failed");
+      actions = [];
+    }
+    if (!social && !String(summary || "").trim()) {
+      summary = fallbackMeetingSummary(entry, participants);
       actions = [];
     }
     if (summary) {
       const already = entry.log.some((m) => m && m.phase === "summary");
       if (!already) {
-        entry.log.push({ who: "main", text: summary, ts: Date.now(), phase: "summary", isSummary: true });
+        entry.log.push({ who: hostId || "main", text: summary, ts: Date.now(), phase: "summary", isSummary: true, host: !!hostId });
         saveSess();
-        broadcast({ type: "chat.message", agent: "main", task, text: summary,
-          session: entry.key, phase: "summary", isSummary: true });
+        broadcast({ type: "chat.message", agent: hostId || "main", task, text: summary,
+          session: entry.key, phase: "summary", isSummary: true, host: !!hostId });
       }
     }
     // Always attempt to save and broadcast action items, even if summary failed
@@ -4565,7 +4803,7 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
         entry.log[sidx].text = summaryWithDrafts;
         saveSess();
       }
-      for (const id of ids) {
+      for (const id of participants) {
         const ownLines = entry.log
           .filter((m) => m && m.who === id && m.text)
           .slice(0, 4)
@@ -4584,6 +4822,14 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
           agents: ids,
         });
       }
+      upsertSessionNote("ceo", meetingReportText(entry, summaryWithDrafts), {
+        who: hostId || "main",
+        phase: "meeting-summary",
+        isSummary: true,
+        meeting: entry.key,
+        meetingTitle: entry.title,
+        agents: participants,
+      });
       saveSess();
     }
     // Markdown minutes inside the agents' workspace — searchable by them.
@@ -4850,7 +5096,9 @@ const server = http.createServer((req, res) => {
     // meeting (a finished Meeting Log stays read-only). Only group meetings are
     // ever live; @sub logs never are.
     res.end(JSON.stringify({ log: (entry && entry.log) || [],
-      live: !!(entry && activeMeetings.has(entry.key)) }));
+      live: !!(entry && activeMeetings.has(entry.key)),
+      host: entry && entry.host,
+      agents: (entry && entry.agents) || [] }));
 
   } else if (req.method === "GET" && req.url === "/sessions/all") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -4989,12 +5237,15 @@ const server = http.createServer((req, res) => {
     readBody(req, (body) => {
       try {
         const p = JSON.parse(body);
+        const requestedHost = resolveMeetingHost(p.host);
         const ids = (p.agents || []).filter((id) => id !== "ceo").slice(0, 4);
         // Validate every participant exists in the roster — a stray id would
         // otherwise be silently impersonated by the {name:id} fallback.
         const bad = ids.find((id) => !reg.agents[id]);
         if (bad) throw new Error("unknown agent: " + bad);
-        if (ids.length < 2) throw new Error("need at least 2 agents");
+        if (p.host && !requestedHost) throw new Error("unknown host: " + p.host);
+        const participantIds = requestedHost ? ids.filter((id) => id !== requestedHost) : ids;
+        if (participantIds.length < 1) throw new Error("need at least 1 participant besides the host");
         if (!p.topic) throw new Error("no topic");
         const historyMeetings = Array.isArray(p.historyMeetings)
           ? p.historyMeetings.map((x) => String(x)).filter(Boolean).slice(0, 5)
@@ -5002,9 +5253,10 @@ const server = http.createServer((req, res) => {
         // Concurrent meetings are allowed — disjoint teams huddle in parallel,
         // and the wallpaper ghost-splits anyone double-booked.
         const mkey = "g" + Date.now();
-        runDiscussion(ids, String(p.topic), Math.min(Math.max(Number(p.rounds) || 2, 1), 6), false, mkey, { historyMeetings });
+        runDiscussion(ids, String(p.topic), Math.min(Math.max(Number(p.rounds) || 2, 1), 6), false, mkey,
+          { historyMeetings, host: requestedHost });
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, session: mkey }));
+        res.end(JSON.stringify({ ok: true, session: mkey, host: requestedHost || undefined, agents: participantIds }));
       } catch (e) {
         res.writeHead(400);
         res.end(String(e.message));

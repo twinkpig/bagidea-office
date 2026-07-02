@@ -81,6 +81,11 @@ function codexVersionSpawnSpec({ platform = process.platform, useWsl, distro }) 
   return { command: "codex", args: ["--version"], shell: false };
 }
 
+function defaultUseWsl({ platform = process.platform, configured } = {}) {
+  if (configured !== undefined) return !!configured;
+  return platform === "win32";
+}
+
 function codexInteractiveArgs({ threadId }) {
   return threadId ? ["resume", String(threadId)] : [];
 }
@@ -109,6 +114,7 @@ module.exports = {
   codexInteractiveSpawnSpec,
   codexSpawnSpec,
   codexVersionSpawnSpec,
+  defaultUseWsl,
   parseCodexJsonLine,
   codexProgressLabel,
   codexTextFromEvent,

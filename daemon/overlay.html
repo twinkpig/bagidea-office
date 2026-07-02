@@ -5869,7 +5869,10 @@
          <select id="dTmpl">${tmplOpts}</select></div>
        <div class="field"><label>TOPIC — หัวข้อให้ทีมถกกัน</label>
          <input id="dTopic" placeholder='เช่น "วางแผนฟีเจอร์ onboarding ใหม่"'></div>
-       <div class="field"><label>PARTICIPANTS (เลือก 2-4 ตัว)</label>
+       <div class="field"><label>主持人</label>
+         <select id="dHost"></select>
+         <div style="font-size:11px;color:var(--dim);margin-top:5px">默认 Shino / Director。主持人负责开场、串场和最终汇报，不占参会名额。</div></div>
+       <div class="field"><label>PARTICIPANTS (选择 1-4 位，不含主持人)</label>
          <div class="checks" id="dWho"></div></div>
 	       <div class="field"><label>DISCUSSION ROUNDS (ความลึกของวงถก)</label>
 	         <select id="dRounds">
@@ -5891,12 +5894,14 @@
        </div>`;
     // Picking a template fills topic + rounds (unless the user edits them after).
     const updateRoundHint = () => {
-      const n = picked.size;
+      const host = modalCard.querySelector("#dHost").value;
+      const n = [...picked].filter((id) => id !== host).length;
       const r = Math.max(1, Number(modalCard.querySelector("#dRounds").value) || 2);
-      const turns = n ? n * (1 + r) : 0;
+      const hostTurns = host ? 1 + r : 0;
+      const turns = n ? n * (1 + r) + hostTurns : 0;
       modalCard.querySelector("#roundHint").textContent =
-        n ? `量化: ${n} 人 x (1 轮 opening + ${r} 轮 discussion) = ${turns} 次发言，结束后自动生成总结和结论。`
-          : `量化: 每人 1 轮 opening + N 轮 discussion，结束后自动生成总结和结论。`;
+        n ? `量化: 主持人 ${host ? nameOf(host) : "无"} ${hostTurns} 次 + ${n} 位参会人 x (1 轮 opening + ${r} 轮 discussion) = ${turns} 次发言，结束后由主持人汇报总结。`
+          : `量化: 先选择至少 1 位参会人；主持人负责开场、每轮串场和最终汇报。`;
     };
     modalCard.querySelector("#dTmpl").onchange = function () {
       const t = MEETING_TEMPLATES.find((x) => x.id === this.value);
@@ -5946,11 +5951,28 @@
       historyTimer = setTimeout(searchHistory, 250);
     };
     searchHistory();
+    const hostSel = modalCard.querySelector("#dHost");
+    const hostIds = Object.keys(ROSTER).filter((x) => x !== "ceo");
+    hostSel.innerHTML = hostIds.map((id) =>
+      `<option value="${esc(id)}"${id === "main" ? " selected" : ""}>${esc(nameOf(id))} · ${esc(roleOf(id))} · ${runtimeName(effectiveRuntimeForAgent(id).runtime)}</option>`
+    ).join("");
+    hostSel.onchange = () => {
+      for (const id of [...picked]) {
+        if (id === hostSel.value) picked.delete(id);
+      }
+      box.querySelectorAll(".chk").forEach((row) => {
+        const id = row.dataset.agent || "";
+        row.classList.toggle("on", picked.has(id));
+        row.classList.toggle("disabled", id === hostSel.value);
+      });
+      updateRoundHint();
+    };
     const box = modalCard.querySelector("#dWho");
     // ทีมทั้งหมดจาก registry (CEO คือคุณ — ไม่เข้าร่วมวงประชุมของ AI)
     for (const id of Object.keys(ROSTER).filter((x) => x !== "ceo")) {
       const c = document.createElement("div");
       c.className = "chk";
+      c.dataset.agent = id;
       const f = document.createElement("div");
       f.className = "mini px";
       const k = 18 / 36;
@@ -5959,15 +5981,23 @@
       f.style.backgroundPosition = `${-14 * k}px ${-14 * k}px`;
       c.appendChild(f);
       c.appendChild(document.createTextNode(`${nameOf(id)} · ${roleOf(id)}`));
-      c.onclick = () => { picked.has(id) ? picked.delete(id) : picked.add(id); c.classList.toggle("on"); updateRoundHint(); };
+      c.onclick = () => {
+        if (id === hostSel.value) return;
+        picked.has(id) ? picked.delete(id) : picked.add(id);
+        c.classList.toggle("on", picked.has(id));
+        updateRoundHint();
+      };
       box.appendChild(c);
     }
+    hostSel.onchange();
     updateRoundHint();
     modalCard.querySelector("#dCancel").onclick = closeModal;
     modalCard.querySelector("#dGo").onclick = async () => {
       const topic = modalCard.querySelector("#dTopic").value.trim();
-      if (!topic || picked.size < 2) return;
-      const r = await api("/discuss", { agents: [...picked], topic,
+      const host = modalCard.querySelector("#dHost").value;
+      const agents = [...picked].filter((id) => id !== host);
+      if (!topic || agents.length < 1) return;
+      const r = await api("/discuss", { host, agents, topic,
         rounds: Number(modalCard.querySelector("#dRounds").value),
         historyMeetings: [...selectedHistory] }).catch(() => ({}));
       closeModal();
