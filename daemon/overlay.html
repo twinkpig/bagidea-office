@@ -13,6 +13,14 @@
   }
   * { box-sizing: border-box; margin: 0; }
   html { background: #0a111d; }
+  html.native-window { background: #0a111d; }
+  html.native-window body {
+    border: none;
+    border-radius: 0;
+  }
+  html.native-window #modal {
+    border-radius: 0;
+  }
   body {
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", "Thonburi", sans-serif;
     background: radial-gradient(1200px 700px at 70% -10%, #14233c 0%, #0a111d 60%, #070b13 100%);
@@ -125,6 +133,10 @@
   }
   .seat:hover { background: rgba(94,200,255,0.08); }
   .seat.active { border-color: var(--accent); background: rgba(94,200,255,0.12); }
+  .seat[draggable="true"] { cursor: grab; }
+  .seat.dragging { opacity: 0.45; transform: scale(0.96); }
+  .seat.dropBefore { box-shadow: -3px 0 0 var(--accent); }
+  .seat.dropAfter { box-shadow: 3px 0 0 var(--accent); }
   .seat .face {
     width: 36px; height: 36px; border-radius: 9px;
     background-color: #1c2740; outline: 1px solid rgba(255,255,255,0.12);
@@ -972,7 +984,6 @@
   <button id="setBtn" title="Office settings — agents, roles" style="margin-left:6px">⚙</button>
   <button id="moreBtn" title="เพิ่มเติม" style="margin-left:6px">⋯</button>
   <button id="sideBtn" title="Security Center & Mission Control" style="margin-left:6px">🛡<span id="permBadge"></span></button>
-  <div class="winbtn" id="fullBtn" title="Fullscreen chat" style="margin-left:6px"></div>
   <div class="winbtn hide" id="hideBtn" title="Hide (chat head brings it back)">—</div>
 </header>
 <!-- ⋯ overflow menu: secondary tools, so the header never overflows -->
@@ -1689,6 +1700,9 @@
     const p = REGROLEPROFILES && REGROLEPROFILES[String(role || "")];
     return p && typeof p === "object" ? p : {};
   }
+  function roleSeed(p) {
+    return String((p && (p.personaSeed || p.summary || p.prompt)) || "");
+  }
   function effectiveRuntimeForAgent(id) {
     const a = ROSTER[id] || {};
     const ar = normRuntime(a.runtime);
@@ -1774,6 +1788,8 @@
   const missions = {};
   const agents = {};   // id -> {state}
   let target = "ceo";   // open on the CEO seat (you) — orders flow to the Director
+  let railOrder = [];
+  let railDragId = "";
 
   function isRosterAgent(id) {
     return !!(ROSTER && ROSTER[id]);
@@ -1793,20 +1809,45 @@
     }
   }
 
+  function syncRailOrder() {
+    const ids = Object.keys(ROSTER || {}).filter((id) => id !== "ceo" && id !== "main");
+    const known = new Set(ids);
+    railOrder = [...railOrder.filter((id) => known.has(id)), ...ids.filter((id) => !railOrder.includes(id))];
+  }
+
+  function moveRailAgent(from, to, after = false) {
+    if (!from || !to || from === to) return false;
+    if (from === "ceo" || from === "main" || to === "ceo" || to === "main") return false;
+    syncRailOrder();
+    const fromIx = railOrder.indexOf(from);
+    const toIx = railOrder.indexOf(to);
+    if (fromIx < 0 || toIx < 0) return false;
+    railOrder.splice(fromIx, 1);
+    let insertAt = railOrder.indexOf(to);
+    if (insertAt < 0) insertAt = railOrder.length;
+    if (after) insertAt += 1;
+    railOrder.splice(insertAt, 0, from);
+    api("/registry/agent/order", { ids: railOrder }).catch(() => {});
+    renderRail();
+    return true;
+  }
+
   const DOTS = { idle: "#4ade80", working: "#5ec8ff", blocked: "#ffb054", offline: "#6b7280", meeting: "#c084fc" };
   function renderRail() {
     railEl.innerHTML = "";
     // The CEO (you) always leads, then the Director, then the team in the order
-    // they were added (registry order — matches the rest of the UI).
-    const order = Object.keys(agents);
-    const ids = order.slice().sort((a, b) => {
-      const w = (x) => (x === "ceo" ? 0 : x === "main" ? 1 : 2);
-      return w(a) - w(b) || order.indexOf(a) - order.indexOf(b);
-    });
+    // saved in registry. CEO and Director stay pinned; staff can be reordered.
+    syncRailOrder();
+    const present = new Set(Object.keys(agents));
+    const fixed = ["ceo", "main"].filter((id) => present.has(id));
+    const ids = fixed.concat(railOrder.filter((id) => present.has(id)));
     for (const id of ids) {
       const seat = document.createElement("div");
       seat.className = "seat" + (id === target ? " active" : "")
         + (id === "ceo" ? " ceoSeat" : "") + (id === "main" ? " leadSeat" : "");
+      seat.dataset.id = id;
+      const canDrag = id !== "ceo" && id !== "main";
+      seat.draggable = canDrag;
       const f = document.createElement("div");
       f.className = "face";
       f.textContent = id[0].toUpperCase();
@@ -1832,6 +1873,34 @@
       ed.title = tr("แก้ไข") + " " + nameOf(id);
       ed.onclick = (e) => { e.stopPropagation(); openEditor(id); };
       seat.appendChild(ed);
+      seat.addEventListener("dragstart", (e) => {
+        if (!canDrag) return;
+        railDragId = id;
+        seat.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", id);
+      });
+      seat.addEventListener("dragend", () => {
+        railDragId = "";
+        railEl.querySelectorAll(".dragging,.dropBefore,.dropAfter").forEach((el) =>
+          el.classList.remove("dragging", "dropBefore", "dropAfter"));
+      });
+      seat.addEventListener("dragover", (e) => {
+        if (!canDrag || !railDragId || railDragId === id) return;
+        e.preventDefault();
+        const after = e.clientX > seat.getBoundingClientRect().left + seat.offsetWidth / 2;
+        seat.classList.toggle("dropBefore", !after);
+        seat.classList.toggle("dropAfter", after);
+      });
+      seat.addEventListener("dragleave", () => seat.classList.remove("dropBefore", "dropAfter"));
+      seat.addEventListener("drop", (e) => {
+        if (!canDrag) return;
+        e.preventDefault();
+        const from = e.dataTransfer.getData("text/plain") || railDragId;
+        const after = e.clientX > seat.getBoundingClientRect().left + seat.offsetWidth / 2;
+        seat.classList.remove("dropBefore", "dropAfter");
+        moveRailAgent(from, id, after);
+      });
       seat.title = id === "ceo"
         ? `${nameOf(id)} — ${tr("นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง")}`
         : `${nameOf(id)} — ${roleOf(id)} (double-click: ID card)`;
@@ -3808,7 +3877,7 @@
         row.innerHTML = `<div class="meta"><b>${esc(r)} ${runtimeBadgeHtml(info)}</b>` +
           `<span>${p.tier ? "tier " + p.tier + " · " : ""}` +
           `🎯${(p.skills || []).length} · 🔧${(p.tools || []).length}` +
-          `${p.personaSeed ? " · persona seed" : ""}</span></div>` +
+          `${roleSeed(p) ? " · persona seed" : ""}</span></div>` +
           `<div class="winbtn hide" title="Remove role">✕</div>`;
         row.onclick = () => openRoleEditor(r);
         row.querySelector(".winbtn").onclick = async (e) => {
@@ -3854,7 +3923,7 @@
     modalCard.querySelector("#rName").value = name;
     modalCard.querySelector("#rRuntime").value = normRuntime(p.runtime);
     modalCard.querySelector("#rTier").value = p.tier ? String(p.tier) : "";
-    modalCard.querySelector("#rPersona").value = p.personaSeed || "";
+    modalCard.querySelector("#rPersona").value = roleSeed(p);
     buildChipPicker(modalCard.querySelector("#rSkills"), Object.keys(REGSKILLS).map((sid) =>
       ({ val: sid, label: REGSKILLS[sid].name, tip: REGSKILLS[sid].description || "" })), mySkills);
     buildChipPicker(modalCard.querySelector("#rTools"), REGTOOLS.map((t) =>
@@ -5559,26 +5628,6 @@
         renderGroupMsg(m, faceId);
       }
     } catch {}
-    // Load historical follow-up drafts for finished meetings. These are not
-    // scheduled jobs; they stay attached to the meeting record until the owner
-    // acts on them manually.
-    if (!live && bucket === "@group") {
-      try {
-        const actionsRes = await fetch(`/sessions/${encodeURIComponent(key)}/actions`);
-        if (actionsRes.ok) {
-          const { actions } = await actionsRes.json();
-          if (actions && actions.length) {
-            for (const a of actions) {
-              const ownerName = (reg.agents[a.owner] || { name: a.owner }).name;
-              addMsg("agent summary", null, `📝 <b>${ownerName}</b>: ${a.text}` +
-                (a.due ? ` <span style="color:var(--dim)">⏰ ${a.due}</span>` : "") +
-                `<br><span style="color:var(--dim);font-size:11px">会议跟进项草案，不会自动创建待办。</span>`,
-                a.created, "· follow-up draft");
-            }
-          }
-        }
-      } catch {}
-    }
     // Speak bar shows ONLY on the exact live meeting — never on a finished log
     // or a @sub log. liveMeetings is kept in sync by meeting.live/ended events.
     syncSpeakBar(key, live);
@@ -6231,6 +6280,7 @@
     }
     if (ev.type === "roster.sync") {
       ROSTER = ev.agents || {};
+      railOrder = Array.isArray(ev.agentOrder) ? ev.agentOrder.slice() : Object.keys(ROSTER);
       REGROLES = ev.roles || [];
       REGROLEPROFILES = ev.roleProfiles || {};
       DEFAULT_RUNTIME = normRuntime(ev.defaultRuntime) || "claude";
@@ -6887,24 +6937,17 @@
   const shellPost = window.ipc && window.ipc.postMessage
     ? (m) => window.ipc.postMessage(m) : null;
   if (shellPost) {
+    document.documentElement.classList.add("native-window");
     document.getElementById("titlebar").addEventListener("mousedown", (e) => {
       if (e.button === 0 && !e.target.closest("button") && !e.target.closest(".winbtn"))
         shellPost("drag-overlay");
     });
-    const fullBtn = document.getElementById("fullBtn");
-    fullBtn.onclick = () => shellPost("fullscreen");
     document.getElementById("hideBtn").onclick = () => shellPost("hide");
-    const ICON_FULL = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.7H2.7V6M10 2.7h3.3V6M6 13.3H2.7V10M10 13.3h3.3V10"/></svg>';
-    const ICON_UNFULL = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 6h3.1V2.9M13.2 6h-3.1V2.9M2.8 10h3.1v3.1M13.2 10h-3.1v3.1"/></svg>';
     window.setFullscreenMode = (on) => {
       document.body.classList.toggle("fullscreen", !!on);
-      fullBtn.innerHTML = on ? ICON_UNFULL : ICON_FULL;
-      fullBtn.title = on ? "Restore chat window" : "Fullscreen chat";
     };
-    window.setFullscreenMode(true);
   } else {
     // plain browser: the OS window has its own chrome
-    document.getElementById("fullBtn").style.display = "none";
     document.getElementById("hideBtn").style.display = "none";
     document.body.style.borderRadius = "0";
     document.body.style.border = "none";

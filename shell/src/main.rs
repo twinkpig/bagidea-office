@@ -49,8 +49,6 @@ enum UserEvent {
     DragOrb,
     DragOverlay,
     HideOverlay,
-    MiniToggle,
-    FullscreenToggle,
     FeedToggle,
     SetHotkey(String),
     PttKey(bool), // global voice hotkey: true = pressed, false = released
@@ -2217,14 +2215,17 @@ fn chrome_window(
     y: f64,
     icon: Option<Icon>,
     transparent: bool,
+    overlay_shell: bool,
 ) -> Window {
     let mut b = WindowBuilder::new()
         .with_title(title)
         .with_inner_size(LogicalSize::new(w, h))
         .with_position(LogicalPosition::new(x, y))
-        .with_decorations(false)
-        .with_resizable(false)
-        .with_always_on_top(true);
+        .with_decorations(!overlay_shell)
+        .with_resizable(!overlay_shell)
+        .with_always_on_top(false);
+    // The main chat is a normal chat window: taskbar-visible and not always-on-top.
+    // Splash/orb remain overlay-shell windows; the orb is raised explicitly.
     // Per-pixel alpha so a rounded/circular shape comes from the page's anti-aliased
     // CSS border-radius — NOT a hard-edged SetWindowRgn clip (which looks jagged).
     if transparent {
@@ -2233,7 +2234,9 @@ fn chrome_window(
     if let Some(ic) = icon {
         b = b.with_window_icon(Some(ic));
     }
-    b = platform::apply_chrome(b);
+    if overlay_shell {
+        b = platform::apply_chrome(b);
+    }
     b.build(el).expect("window")
 }
 
@@ -2580,6 +2583,7 @@ fn main() {
         (logical_h - SPLASH_SIZE) / 2.0 - 30.0,
         None,
         true,
+        true,
     );
     platform::set_no_activate(&splash);
     let _splash_view = WebViewBuilder::new()
@@ -2599,6 +2603,7 @@ fn main() {
         PARK.1,
         app_icon(),
         false,
+        false,
     );
     overlay.set_outer_position(LogicalPosition::new(PARK.0, PARK.1));
     let overlay_id = overlay.id();
@@ -2611,8 +2616,6 @@ fn main() {
                 let _ = match req.body().as_str() {
                     "drag-overlay" => p_overlay.send_event(UserEvent::DragOverlay),
                     "hide" => p_overlay.send_event(UserEvent::HideOverlay),
-                    "mini" => p_overlay.send_event(UserEvent::MiniToggle),
-                    "fullscreen" => p_overlay.send_event(UserEvent::FullscreenToggle),
                     s if s.starts_with("hotkey:") => {
                         p_overlay.send_event(UserEvent::SetHotkey(s[7..].to_string()))
                     }
@@ -2625,7 +2628,6 @@ fn main() {
     )
     .build(&overlay)
     .expect("overlay webview");
-    platform::region_round(&overlay, FULL.0, FULL.1, 18.0);
 
     // ---- circular chat head
     let orb = chrome_window(
@@ -2636,6 +2638,7 @@ fn main() {
         orb_x,
         orb_y,
         app_icon(),
+        true,
         true,
     );
     platform::set_no_activate(&orb);
@@ -2668,9 +2671,7 @@ fn main() {
     // overlay. Held here so their Window + WebView stay alive; dropped on close.
     // Tuple: (window id, single-instance key, window, webview).
     let mut popups: Vec<(tao::window::WindowId, String, Window, wry::WebView)> = Vec::new();
-    let mut mini = false;
     let mut feed = false;
-    let mut overlay_fullscreen = true;
     let mut editor_pid: u32 = 0;
     let mut world_ready = false;
     // Tracks whether the wallpaper is believed visible (30 fps) vs throttled
@@ -2868,15 +2869,7 @@ fn main() {
                 .map(|p| p.x < -2000)
                 .unwrap_or(true);
             if hidden {
-                if overlay_fullscreen && !feed_now {
-                    overlay.set_inner_size(LogicalSize::new(logical_w, logical_h));
-                    platform::region_round(&overlay, logical_w, logical_h, 0.0);
-                    let _ = overlay_view
-                        .evaluate_script("window.setFullscreenMode && setFullscreenMode(true)");
-                }
-                let (px, py) = if overlay_fullscreen && !feed_now {
-                    (0.0, 0.0)
-                } else if feed_now {
+                let (px, py) = if feed_now {
                     (feed_x, feed_y)
                 } else {
                     (overlay_x, overlay_y)
@@ -2941,27 +2934,9 @@ fn main() {
                 ..
             } => {
                 if window_id == overlay_id {
-                    let (w, h) = if overlay_fullscreen {
-                        (logical_w, logical_h)
-                    } else if feed {
-                        (FEED_W, feed_h)
-                    } else if mini {
-                        MINI
-                    } else {
-                        FULL
-                    };
-                    platform::region_round(
-                        &overlay,
-                        w,
-                        h,
-                        if overlay_fullscreen {
-                            0.0
-                        } else if feed {
-                            14.0
-                        } else {
-                            18.0
-                        },
-                    );
+                    // The chat window uses native OS chrome now. Do not apply a
+                    // SetWindowRgn clip here: after maximize/resize it can crop the
+                    // WebView and leave rough white edges.
                 } else if window_id == orb_id {
                     // Re-clip the orb to its circle on any DPI / monitor change so the
                     // transparent corners keep falling through to the desktop.
@@ -3000,44 +2975,7 @@ fn main() {
                 UserEvent::HideOverlay => {
                     overlay.set_outer_position(LogicalPosition::new(PARK.0, PARK.1));
                 }
-                UserEvent::MiniToggle => {
-                    if !feed {
-                        overlay_fullscreen = false;
-                        let _ = overlay_view.evaluate_script(
-                            "window.setFullscreenMode && setFullscreenMode(false)",
-                        );
-                        mini = !mini;
-                        let (w, h) = if mini { MINI } else { FULL };
-                        overlay.set_inner_size(LogicalSize::new(w, h));
-                        if !mini {
-                            overlay.set_outer_position(LogicalPosition::new(overlay_x, overlay_y));
-                        }
-                        platform::region_round(&overlay, w, h, 18.0);
-                        raise_orb(&orb);
-                    }
-                }
-                UserEvent::FullscreenToggle => {
-                    if !feed {
-                        overlay_fullscreen = !overlay_fullscreen;
-                        mini = false;
-                        let _ = overlay_view.evaluate_script(&format!(
-                            "window.setFullscreenMode && setFullscreenMode({})",
-                            overlay_fullscreen
-                        ));
-                        if overlay_fullscreen {
-                            overlay.set_outer_position(LogicalPosition::new(0.0, 0.0));
-                            overlay.set_inner_size(LogicalSize::new(logical_w, logical_h));
-                            platform::region_round(&overlay, logical_w, logical_h, 0.0);
-                        } else {
-                            overlay.set_inner_size(LogicalSize::new(FULL.0, FULL.1));
-                            overlay.set_outer_position(LogicalPosition::new(overlay_x, overlay_y));
-                            platform::region_round(&overlay, FULL.0, FULL.1, 18.0);
-                        }
-                        raise_orb(&orb);
-                    }
-                }
                 UserEvent::FeedToggle => {
-                    overlay_fullscreen = false;
                     feed = !feed;
                     let _ = overlay_view
                         .evaluate_script("window.setFullscreenMode && setFullscreenMode(false)");
@@ -3048,12 +2986,9 @@ fn main() {
                     if feed {
                         overlay.set_inner_size(LogicalSize::new(FEED_W, feed_h));
                         overlay.set_outer_position(LogicalPosition::new(feed_x, feed_y));
-                        platform::region_round(&overlay, FEED_W, feed_h, 14.0);
                     } else {
-                        let (w, h) = if mini { MINI } else { FULL };
-                        overlay.set_inner_size(LogicalSize::new(w, h));
+                        overlay.set_inner_size(LogicalSize::new(FULL.0, FULL.1));
                         overlay.set_outer_position(LogicalPosition::new(overlay_x, overlay_y));
-                        platform::region_round(&overlay, w, h, 18.0);
                     }
                     raise_orb(&orb);
                 }
@@ -3074,16 +3009,7 @@ fn main() {
                             .map(|p| p.x < -2000)
                             .unwrap_or(true);
                         if hidden {
-                            if overlay_fullscreen && !feed {
-                                overlay.set_inner_size(LogicalSize::new(logical_w, logical_h));
-                                platform::region_round(&overlay, logical_w, logical_h, 0.0);
-                                let _ = overlay_view.evaluate_script(
-                                    "window.setFullscreenMode && setFullscreenMode(true)",
-                                );
-                            }
-                            let (px, py) = if overlay_fullscreen && !feed {
-                                (0.0, 0.0)
-                            } else if feed {
+                            let (px, py) = if feed {
                                 (feed_x, feed_y)
                             } else {
                                 (overlay_x, overlay_y)

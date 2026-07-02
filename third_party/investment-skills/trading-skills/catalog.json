@@ -1,0 +1,88 @@
+{
+  "version": "1.0.0",
+  "name": "trading-skills",
+  "description": "68 trading legends as Claude Code skills",
+  "source": "https://github.com/VictorVVedtion/vibe-sensei",
+  "repository": "https://github.com/VictorVVedtion/trading-skills",
+  "license": "MIT",
+  "skills": [
+    {
+      "id": "jesse-livermore",
+      "category": "master",
+      "name": "Jesse Livermore Trading Advisor",
+      "archetype": "trend_follower",
+      "rarity": "legendary",
+      "path": "skills/masters/jesse-livermore/SKILL.md"
+    },
+    {
+      "id": "george-soros",
+      "category": "master",
+      "name": "George Soros Trading Advisor",
+      "archetype": "macro_trader",
+      "rarity": "legendary",
+      "path": "skills/masters/george-soros/SKILL.md"
+    },
+    {
+      "id": "warren-buffett",
+      "category": "master",
+      "name": "Warren Buffett Trading Advisor",
+      "archetype": "value_investor",
+      "rarity": "legendary",
+      "path": "skills/masters/warren-buffett/SKILL.md"
+    },
+    {
+      "id": "benjamin-graham",
+      "category": "master",
+      "name": "Benjamin Graham Trading Advisor",
+      "archetype": "value_investor",
+      "rarity": "legendary",
+      "path": "skills/masters/benjamin-graham/SKILL.md"
+    },
+    {
+      "id": "jim-simons",
+      "category": "master",
+      "name": "Jim Simons Trading Advisor",
+      "archetype": "quant",
+      "rarity": "legendary",
+      "path": "skills/masters/jim-simons/SKILL.md"
+    },
+    {
+      "id": "sun-tzu",
+      "category": "master",
+      "name": "Sun Tzu Trading Advisor",
+      "archetype": "strategist",
+      "rarity": "legendary",
+      "path": "skills/masters/sun-tzu/SKILL.md"
+    },
+    {
+      "id": "satoshi-nakamoto",
+      "category": "master",
+      "name": "Satoshi Nakamoto Trading Advisor",
+      "archetype": "crypto_native",
+      "rarity": "legendary",
+      "path": "skills/masters/satoshi-nakamoto/SKILL.md"
+    },
+    {
+      "id": "john-von-neumann",
+      "category": "master",
+      "name": "John von Neumann Trading Advisor",
+      "archetype": "scientist",
+      "rarity": "legendary",
+      "path": "skills/masters/john-von-neumann/SKILL.md"
+    },
+    {
+      "id": "pre-trade-gate",
+      "category": "risk_tool",
+      "name": "Pre-Trade Gate",
+      "description": "9-check risk validation + 10 ghost warnings",
+      "path": "skills/pre-trade-gate/SKILL.md"
+    },
+    {
+      "id": "tilt-detector",
+      "category": "risk_tool",
+      "name": "Tilt Detector",
+      "description": "Emotional trading pattern detection and intervention",
+      "path": "skills/tilt-detector/SKILL.md"
+    }
+  ]
+}

@@ -14,11 +14,12 @@ test("@ mention menu shows effective runtime/provider tag", () => {
   assert.match(overlay, /<span class="mrun">\$\{esc\(a\.runtimeTag\)\}<\/span>/);
 });
 
-test("chat chrome keeps only fullscreen and hide window controls", () => {
-  assert.match(overlay, /id="fullBtn"/);
+test("chat chrome keeps only the hide window control", () => {
+  assert.doesNotMatch(overlay, /id="fullBtn"/);
   assert.match(overlay, /id="hideBtn"/);
   assert.doesNotMatch(overlay, /id="miniBtn"/);
   assert.doesNotMatch(overlay, /shellPost\("mini"\)/);
+  assert.doesNotMatch(overlay, /shellPost\("fullscreen"\)/);
 });
 
 test("office feed window is slightly larger", () => {
@@ -26,9 +27,13 @@ test("office feed window is slightly larger", () => {
   assert.match(shellMain, /logical_h \* 0\.56\)\.clamp\(360\.0,\s*620\.0\)/);
 });
 
-test("main chat opens in fullscreen mode by default", () => {
-  assert.match(shellMain, /let mut overlay_fullscreen = true;/);
-  assert.match(shellMain, /window\.setFullscreenMode && setFullscreenMode\(true\)/);
+test("main chat is a normal non-topmost taskbar window by default", () => {
+  assert.doesNotMatch(shellMain, /overlay_fullscreen/);
+  assert.match(shellMain, /normal chat window: taskbar-visible and not always-on-top/);
+  assert.match(shellMain, /with_always_on_top\(false\)/);
+  assert.match(overlay, /document\.documentElement\.classList\.add\("native-window"\)/);
+  assert.doesNotMatch(shellMain, /window\.setFullscreenMode && setFullscreenMode\(true\)/);
+  assert.doesNotMatch(shellMain, /platform::region_round\(&overlay/);
 });
 
 test("chat bubbles show roster display names instead of uppercased ids", () => {
@@ -95,10 +100,11 @@ test("connect tab renders WSL bridge controls in provider-card style", () => {
   assert.doesNotMatch(overlay, /<label class="chk"[^>]*>[^<]*<input[^>]*(?:id="claudeUseWsl"|class="cliUseWsl")[\s\S]*?WSL bridge<\/label>/);
 });
 
-test("meeting action items are labeled as non-executing follow-up drafts", () => {
-  assert.match(overlay, /会议跟进项草案，不会自动创建待办/);
+test("meeting follow-up drafts stay labeled as drafts and merge into summaries", () => {
+  assert.match(server, /const summaryWithDrafts = combineSummaryAndDrafts\(summary, stamped\);/);
+  assert.match(server, /Summary:\\n\$\{summaryWithDrafts\}/);
   assert.match(overlay, /📝 会议跟进项草案 ·/);
-  assert.match(overlay, /follow-up draft/);
+  assert.match(overlay, /不会自动创建待办/);
   assert.doesNotMatch(overlay, /addChip\(`✅ <b>\$\{nameOf\(ev\.action\.owner\)\}/);
 });
 
@@ -123,4 +129,16 @@ test("send locks onto the persisted session returned by /chat", () => {
   assert.match(server, /JSON\.stringify\(\{ task,\s*session:\s*entryKey \}\)/);
   assert.match(overlay, /if \(j\.session\) \{ SESS\[target\] = j\.session; CUR\[target\] = j\.session; \}/);
   assert.match(overlay, /refreshThreadBar\(true\);\s*\/\/ reload the exact persisted thread for this send/);
+});
+
+test("chat rail avatars can be drag-reordered and persist to registry", () => {
+  assert.match(overlay, /let railOrder = \[\];/);
+  assert.match(overlay, /function syncRailOrder\(\)/);
+  assert.match(overlay, /function moveRailAgent\(from,\s*to,\s*after = false\)/);
+  assert.match(overlay, /seat\.draggable = canDrag;/);
+  assert.match(overlay, /addEventListener\("dragstart"/);
+  assert.match(overlay, /addEventListener\("drop"/);
+  assert.match(overlay, /api\("\/registry\/agent\/order",\s*\{ ids: railOrder/);
+  assert.match(server, /req\.method === "POST" && req\.url === "\/registry\/agent\/order"/);
+  assert.match(server, /agentOrder: reg\.agentOrder \|\| Object\.keys\(reg\.agents \|\| \{\}\)/);
 });

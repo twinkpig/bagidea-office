@@ -1,0 +1,24 @@
+{
+  "policy": "One organized SKILL.md is emitted per canonical person or workflow id. Same-person duplicates should be merged into the canonical id instead of installed separately.",
+  "canonical_people": [
+    "invest-master-benjamin-graham",
+    "invest-master-george-soros",
+    "invest-master-jesse-livermore",
+    "invest-master-jim-simons",
+    "invest-master-john-von-neumann",
+    "invest-master-satoshi-nakamoto",
+    "invest-master-sun-tzu",
+    "invest-master-warren-buffett"
+  ],
+  "same_person_duplicates_found": [],
+  "related_but_not_duplicates": [
+    {
+      "ids": [
+        "invest-master-warren-buffett",
+        "invest-master-benjamin-graham",
+        "invest-dyp-ask"
+      ],
+      "reason": "All are value-investing related, but they represent different people/frameworks, so they are intentionally kept separate."
+    }
+  ]
+}

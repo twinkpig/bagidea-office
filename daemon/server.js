@@ -96,6 +96,22 @@ function loadReg() {
   reg.roles = Array.isArray(reg.roles) ? reg.roles : ["Director", "Founder", "Researcher", "Engineer",
     "Designer", "Analyst", "Operator", "Specialist"];
   reg.roleProfiles = reg.roleProfiles && typeof reg.roleProfiles === "object" ? reg.roleProfiles : {};
+  const roleSet = new Set(reg.roles);
+  for (const r of Object.keys(reg.roleProfiles)) {
+    const n = String(r || "").trim().slice(0, 40);
+    if (n && !roleSet.has(n)) { reg.roles.push(n); roleSet.add(n); }
+  }
+  for (const a of Object.values(reg.agents)) {
+    const n = String((a && a.role) || "").trim().slice(0, 40);
+    if (!n) continue;
+    if (!roleSet.has(n)) { reg.roles.push(n); roleSet.add(n); }
+    if (!reg.roleProfiles[n]) reg.roleProfiles[n] = {};
+  }
+  const knownAgents = new Set(Object.keys(reg.agents));
+  reg.agentOrder = Array.isArray(reg.agentOrder)
+    ? reg.agentOrder.filter((id) => knownAgents.has(id))
+    : [];
+  for (const id of Object.keys(reg.agents)) if (!reg.agentOrder.includes(id)) reg.agentOrder.push(id);
   reg.defaultRuntime = runtimeConfig.normalizeRuntime(reg.defaultRuntime) || "claude";
   reg.claudeUseWsl = claudeRuntime.defaultUseWsl({
     configured: Object.prototype.hasOwnProperty.call(reg, "claudeUseWsl") ? reg.claudeUseWsl : undefined,
@@ -253,6 +269,7 @@ function monitorCount() {
 
 function rosterEvt() {
   return { type: "roster.sync", agents: reg.agents, roles: reg.roles,
+    agentOrder: reg.agentOrder || Object.keys(reg.agents || {}),
     roleProfiles: reg.roleProfiles || {}, defaultRuntime: reg.defaultRuntime || "claude",
     runtimes: ["claude", "codex", "hermes"],
     claudeUseWsl: !!reg.claudeUseWsl, claudeWslDistro: reg.claudeWslDistro || "",
@@ -461,11 +478,77 @@ function appendSessionNote(agent, text, extra = {}) {
   return true;
 }
 
+function upsertSessionNote(agent, text, extra = {}) {
+  if (!agent || !text) return false;
+  const list = sess[agent] || [];
+  let entry = latestSession(agent);
+  if (!entry) {
+    entry = { key: "s" + Date.now(), sid: null, ts: Date.now(), title: "Meeting note", log: [] };
+    sess[agent] = list;
+    list.push(entry);
+  } else if (!list.includes(entry)) {
+    list.push(entry);
+  }
+  entry.log = entry.log || [];
+  const meetingKey = extra.meeting || "";
+  const notePhase = extra.phase || "meeting-note";
+  const note = {
+    who: extra.who || "main",
+    text: String(text),
+    ts: Date.now(),
+    phase: notePhase,
+    isSummary: !!extra.isSummary,
+    meeting: meetingKey || undefined,
+    meetingTitle: extra.meetingTitle || undefined,
+    agents: extra.agents || undefined,
+  };
+  const idx = meetingKey
+    ? entry.log.findIndex((m) => m && m.phase === notePhase && m.meeting === meetingKey)
+    : -1;
+  if (idx >= 0) {
+    const prev = entry.log[idx];
+    const next = { ...prev, ...note };
+    const changed = JSON.stringify(prev) !== JSON.stringify(next);
+    if (changed) entry.log[idx] = next;
+    return changed;
+  }
+  entry.log.push(note);
+  while (entry.log.length > 250) entry.log.shift();
+  return true;
+}
+
+function actionDraftsText(actions) {
+  const list = Array.isArray(actions) ? actions.filter((a) => a && a.text) : [];
+  if (!list.length) return "";
+  return [
+    "## Follow-up Drafts",
+    "",
+    ...list.map((a, i) => {
+      const owner = (reg.agents[a.owner] || { name: a.owner }).name;
+      const due = a.due ? ` (${a.due})` : "";
+      return `${i + 1}. ${owner}: ${a.text}${due}`;
+    }),
+  ].join("\n");
+}
+
+function combineSummaryAndDrafts(summary, actions) {
+  const s = String(summary || "").trim();
+  const d = actionDraftsText(actions).trim();
+  if (!s) return d;
+  if (!d) return s;
+  return `${s}\n\n${d}`;
+}
+
 function backfillMeetingSummaries() {
   let changed = false;
   for (const meeting of sess["@group"] || []) {
     const summary = (meeting.log || []).find((m) => m && (m.isSummary || m.phase === "summary"));
     if (!summary || !meeting.agents || !meeting.agents.length) continue;
+    const mergedSummary = combineSummaryAndDrafts(summary.text || "", loadActions(meeting.key));
+    if (mergedSummary && mergedSummary !== summary.text) {
+      summary.text = mergedSummary;
+      changed = true;
+    }
     for (const agent of meeting.agents) {
       const ownLines = (meeting.log || [])
         .filter((m) => m && m.who === agent && m.text)
@@ -475,9 +558,9 @@ function backfillMeetingSummaries() {
       const text = [
         `🗣 Meeting trace: ${meeting.title || meeting.key}`,
         ownLines ? `\nYour contributions:\n${ownLines}` : "",
-        `\nSummary:\n${summary.text || ""}`,
+        `\nSummary:\n${mergedSummary || summary.text || ""}`,
       ].join("\n").trim();
-      if (appendSessionNote(agent, text, {
+      if (upsertSessionNote(agent, text, {
         who: "main",
         phase: "meeting-summary",
         isSummary: true,
@@ -4292,6 +4375,18 @@ function buildSelectedMeetingHistory(keys) {
 // bites around ~96 messages — a safety ceiling, not the common case.
 function windowSize(len) { return Math.min(20, 8 + Math.floor(len / 8)); }
 
+function meetingLanguageName(...parts) {
+  const s = parts.map((p) => String(p || "")).join("\n");
+  if (/[\u4e00-\u9fff]/.test(s)) return "Simplified Chinese";
+  if (/[\u3040-\u30ff]/.test(s)) return "Japanese";
+  if (/[ก-๛]/.test(s)) return "Thai";
+  return "English";
+}
+
+function meetingTurnLanguageRule(lang) {
+  return `Language rule: reply only in ${lang}. Do not switch to Thai, Japanese, English, or any other language unless directly quoting source text or a proper noun.`;
+}
+
 // Summarize a finished meeting in ONE call: markdown minutes + a fenced JSON
 // actionItems[] array. Owners are validated against the roster (unknown owners
 // are dropped — better a missing item than a phantom assignee). Returns
@@ -4391,19 +4486,19 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
           const recent = entry.log.slice(-win)
             .map((m) => `${(reg.agents[m.who] || { name: m.who }).name}: ${m.text}`).join("\n");
           const isOpening = phase.name === "opening";
+          const meetingLang = meetingLanguageName(topic, recent);
           const text = await claudeText(
             `You are "${a.name}" (${a.role}) in a ${social ? "casual break-room chat" : "team meeting"} at the office.\n` +
             (a.prompt ? `Your persona: ${a.prompt}\n` : "") +
             `Meeting topic: ${topic}\n` +
+            `${meetingTurnLanguageRule(meetingLang)}\n` +
             (ctx.projectBlurb && isOpening ? `${ctx.projectBlurb}\n` : "") +
             (ctx.meetingHistory && isOpening ? `${ctx.meetingHistory}\n` : "") +
             (isOpening && ctx.memory[id] ? `Your private memory (only you see this):\n${ctx.memory[id]}\n` : "") +
             (recent ? `Recent discussion:\n${recent}\n` : "You open the meeting.\n") +
             `Phase: ${phase.name}. ` +
             (social ? `Give YOUR next contribution as ${a.name}.` : phase.instruction) +
-            `\nถ้าจำเป็นต้องใช้ข้อมูลจริงเพื่อให้ความเห็นแน่นขึ้น คุณค้นเองได้ ` +
-            `(WebSearch / WebFetch / Read) — เฉพาะตอนที่จำเป็นจริงๆ เท่านั้น ไม่ต้องค้นพร่ำเพรื่อ ` +
-            `และตอบกลับเป็นข้อความสนทนาตามปกติ.` +
+            `\nIf real-world facts are needed to make your point more reliable, use WebSearch, WebFetch, or Read only when genuinely necessary. Do not over-search. Reply as a normal meeting contribution.` +
             (social ? SOCIAL_PROPOSAL_INSTRUCTION : ""),
             { tools: social ? "" : "WebSearch,WebFetch,Read,Glob,Grep", provider: a && a.provider, model: a && a.model, env: { OFFICE_AGENT: id, OFFICE_TASK: task } });
           let line = text.split("\n").map((s) => s.trim()).filter(Boolean).join("\n");
@@ -4448,32 +4543,13 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
         saveSess();
         broadcast({ type: "chat.message", agent: "main", task, text: summary,
           session: entry.key, phase: "summary", isSummary: true });
-        for (const id of ids) {
-          const ownLines = entry.log
-            .filter((m) => m && m.who === id && m.text)
-            .slice(0, 4)
-            .map((m) => `- [${m.phase || "chat"}] ${String(m.text).slice(0, 500)}`)
-            .join("\n");
-          appendSessionNote(id, [
-            `🗣 Meeting trace: ${entry.title}`,
-            ownLines ? `\nYour contributions:\n${ownLines}` : "",
-            `\nSummary:\n${summary}`,
-          ].join("\n").trim(), {
-            who: "main",
-            phase: "meeting-summary",
-            isSummary: true,
-            meeting: entry.key,
-            meetingTitle: entry.title,
-            agents: ids,
-          });
-        }
-        saveSess();
       }
     }
     // Always attempt to save and broadcast action items, even if summary failed
+    let stamped = [];
     try {
       if (actions.length) {
-        const stamped = actions.map((a, i) => ({
+        stamped = actions.map((a, i) => ({
           id: `${entry.key}-${i + 1}`, meeting: entry.key, owner: a.owner,
           text: a.text, due: a.due || "", status: "open", created: Date.now()
         }));
@@ -4482,12 +4558,40 @@ async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
           broadcast({ type: "meeting.action", action: a, session: entry.key });
       }
     } catch (e) { console.error("[meeting] action items save failed:", e && e.message); }
+    const summaryWithDrafts = combineSummaryAndDrafts(summary, stamped);
+    if (summaryWithDrafts) {
+      const sidx = (entry.log || []).findIndex((m) => m && m.phase === "summary" && m.isSummary);
+      if (sidx >= 0 && entry.log[sidx].text !== summaryWithDrafts) {
+        entry.log[sidx].text = summaryWithDrafts;
+        saveSess();
+      }
+      for (const id of ids) {
+        const ownLines = entry.log
+          .filter((m) => m && m.who === id && m.text)
+          .slice(0, 4)
+          .map((m) => `- [${m.phase || "chat"}] ${String(m.text).slice(0, 500)}`)
+          .join("\n");
+        appendSessionNote(id, [
+          `🗣 Meeting trace: ${entry.title}`,
+          ownLines ? `\nYour contributions:\n${ownLines}` : "",
+          `\nSummary:\n${summaryWithDrafts}`,
+        ].join("\n").trim(), {
+          who: "main",
+          phase: "meeting-summary",
+          isSummary: true,
+          meeting: entry.key,
+          meetingTitle: entry.title,
+          agents: ids,
+        });
+      }
+      saveSess();
+    }
     // Markdown minutes inside the agents' workspace — searchable by them.
     try {
       const dir = path.join(WORKSPACE, "meetings");
       fs.mkdirSync(dir, { recursive: true });
       const names = ids.map((id) => (reg.agents[id] || { name: id }).name).join(", ");
-      const summaryBlock = summary ? `## Summary\n\n${summary}\n\n## Transcript\n\n` : "";
+      const summaryBlock = summaryWithDrafts ? `## Summary\n\n${summaryWithDrafts}\n\n## Transcript\n\n` : "";
       const transcript = entry.log
         .filter((m) => !m.isSummary && m.phase !== "summary")
         .map((m) => `**[${m.phase || "chat"}] ${(reg.agents[m.who] || { name: m.who }).name}**: ${m.text}`).join("\n\n");
@@ -5088,6 +5192,28 @@ const server = http.createServer((req, res) => {
         pushRoster();
         res.writeHead(200);
         res.end("ok");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/registry/agent/order") {
+    if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body);
+        const ids = Array.isArray(p.ids) ? p.ids.map((id) => String(id || "").trim()).filter(Boolean) : [];
+        const movable = Object.keys(reg.agents || {}).filter((id) => id !== "ceo" && id !== "main");
+        const allowed = new Set(movable);
+        const orderedStaff = [...new Set(ids.filter((id) => allowed.has(id)))]
+          .concat(movable.filter((id) => !ids.includes(id)));
+        const fixed = ["ceo", "main"].filter((id) => reg.agents[id]);
+        reg.agentOrder = fixed.concat(orderedStaff);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, agentOrder: reg.agentOrder }));
       } catch (e) {
         res.writeHead(400);
         res.end(String(e.message));
@@ -6543,8 +6669,21 @@ end tell`;
           if (!reg.roles.includes(n)) reg.roles.push(n);
           const cur = reg.roleProfiles[n] || {};
           const incoming = profile && typeof profile === "object" ? profile : {};
+          const keepText = (key, max) => incoming[key] !== undefined
+            ? String(incoming[key]).slice(0, max)
+            : (cur[key] || "");
+          const seedSource = incoming.personaSeed !== undefined
+            ? incoming.personaSeed
+            : (cur.personaSeed || cur.prompt || cur.summary || "");
           reg.roleProfiles[n] = {
             ...cur,
+            name: keepText("name", 60) || cur.name || n,
+            title: keepText("title", 80) || cur.title || n,
+            summary: keepText("summary", 1000),
+            prompt: keepText("prompt", 24000),
+            expertise: keepText("expertise", 2000),
+            style: keepText("style", 2000),
+            rules: keepText("rules", 4000),
             runtime: runtimeConfig.normalizeRuntime(
               incoming.runtime !== undefined ? incoming.runtime : cur.runtime) || "",
             tier: incoming.tier !== undefined
@@ -6554,8 +6693,7 @@ end tell`;
               ? incoming.skills.filter((s) => reg.skills[s])
               : (cur.skills || []),
             tools: Array.isArray(incoming.tools) ? incoming.tools : (cur.tools || []),
-            personaSeed: String(incoming.personaSeed !== undefined
-              ? incoming.personaSeed : (cur.personaSeed || "")).slice(0, 2000),
+            personaSeed: String(seedSource).slice(0, 2000),
           };
         }
         saveReg();
