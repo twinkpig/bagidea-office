@@ -19,6 +19,8 @@ godot/bin-mac/
 .claude/settings.local.json
 
 # Runtime artifacts
+.codegraph/
+daemon/.wsl-launch/
 daemon/journal.jsonl
 daemon/*.bak
 daemon/registry.json

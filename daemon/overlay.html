@@ -13,12 +13,21 @@
   }
   * { box-sizing: border-box; margin: 0; }
   html { background: #0a111d; }
+  html.native-window { background: #0a111d; }
+  html.native-window body {
+    border: none;
+    border-radius: 0;
+  }
+  html.native-window #modal {
+    border-radius: 0;
+  }
   body {
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", "Thonburi", sans-serif;
     background: radial-gradient(1200px 700px at 70% -10%, #14233c 0%, #0a111d 60%, #070b13 100%);
     color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden;
     border: 1px solid rgba(110, 185, 255, 0.35); border-radius: 18px;
   }
+  body.fullscreen { border-radius: 0; border: none; }
   .px { image-rendering: pixelated; background-repeat: no-repeat; }
 
   /* themed scrollbars */
@@ -124,6 +133,10 @@
   }
   .seat:hover { background: rgba(94,200,255,0.08); }
   .seat.active { border-color: var(--accent); background: rgba(94,200,255,0.12); }
+  .seat[draggable="true"] { cursor: grab; }
+  .seat.dragging { opacity: 0.45; transform: scale(0.96); }
+  .seat.dropBefore { box-shadow: -3px 0 0 var(--accent); }
+  .seat.dropAfter { box-shadow: 3px 0 0 var(--accent); }
   .seat .face {
     width: 36px; height: 36px; border-radius: 9px;
     background-color: #1c2740; outline: 1px solid rgba(255,255,255,0.12);
@@ -185,6 +198,18 @@
     color: #ff9aa8; margin-bottom: 3px; letter-spacing: 0.5px;
   }
   .msg.agent { align-self: flex-start; background: var(--glass); border: 1px solid rgba(255,255,255,0.07); border-bottom-left-radius: 4px; }
+  .msg.summary { align-self: stretch; max-width: 100%; border-color: rgba(94,200,255,0.34); background: rgba(94,200,255,0.08); }
+  .msgtext.collapsed { max-height: 9.8em; overflow: hidden; position: relative; }
+  .msgtext.collapsed::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.8em;
+    background: linear-gradient(to bottom, rgba(14,19,31,0), rgba(14,19,31,0.96));
+  }
+  .msg.you .msgtext.collapsed::after { background: linear-gradient(to bottom, rgba(20,65,96,0), rgba(20,65,96,0.96)); }
+  .msg.summary .msgtext.collapsed::after { background: linear-gradient(to bottom, rgba(17,42,64,0), rgba(17,42,64,0.96)); }
+  .moretext {
+    margin-top: 6px; border: 0; padding: 0; background: transparent; color: var(--accent);
+    font-size: 11px; cursor: pointer; font-weight: 700;
+  }
   .msg .who { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--accent); margin-bottom: 4px; font-weight: 600; }
   .msg .who .face { width: 20px; height: 20px; border-radius: 5px; background-color: #1c2740; }
   .chip {
@@ -288,6 +313,11 @@
     font-size: 11px; color: var(--dim); padding: 2.5px 2px;
     border-bottom: 1px dashed rgba(255,255,255,0.05); line-height: 1.45;
   }
+  #activity {
+    max-height: 190px;
+    overflow-y: auto;
+    padding-right: 3px;
+  }
   #activity .act b { color: #cfe3ff; font-weight: 600; }
   #activity .act .t { color: rgba(160,170,190,0.55); font-size: 10px; margin-right: 5px; }
 
@@ -339,9 +369,9 @@
   .orgrow:first-child .orgseat { border-color: rgba(255,200,90,0.55);
     background: rgba(255,180,60,0.07); }
 
-  /* ---- 📡 feed mode: a pure overlay — no chrome, no buttons, no input ---- */
+  /* ---- 📡 feed mode: a focused office activity view with quick command input ---- */
   #feed, #feedHead { display: none; }
-  body.feedmode main, body.feedmode footer, body.feedmode #rail,
+  body.feedmode main, body.feedmode #rail,
   body.feedmode #threadBar, body.feedmode #sideTab,
   body.feedmode header { display: none !important; }
   /* Belt + braces: popups can NEVER haunt the feed strip, whatever JS state
@@ -368,10 +398,20 @@
   /* column-reverse = newest sits at the bottom AND history scrolls naturally */
   body.feedmode #feed {
     display: flex; flex-direction: column-reverse; gap: 5px;
-    position: fixed; top: 34px; bottom: 6px; left: 6px; right: 6px;
+    position: fixed; top: 34px; bottom: 52px; left: 6px; right: 6px;
     overflow-y: auto; padding: 2px;
     mask-image: linear-gradient(to bottom, transparent, black 12%);
   }
+  body.feedmode footer {
+    display: flex !important;
+    position: fixed; left: 6px; right: 6px; bottom: 6px; z-index: 20;
+    padding: 5px; border: 1px solid var(--line); border-radius: 12px;
+    background: rgba(10, 16, 28, 0.92);
+  }
+  body.feedmode footer #attachBtn,
+  body.feedmode footer #liveBtn,
+  body.feedmode footer #sessBtn { display: none !important; }
+  body.feedmode footer #inp { height: 32px; min-height: 32px; }
   .fitem .fpbtns { display: flex; gap: 5px; margin-top: 5px; }
   .fitem .fpbtns button {
     flex: 1; padding: 3px 6px; font-size: 10.5px; cursor: pointer;
@@ -408,10 +448,10 @@
   #updBar.on { display: block; }
   #updBar:hover { background: rgba(255,176,84,0.2); }
   body.feedmode #updBar { display: none !important; }
-  /* voice-hotkey tip — only visible in feed mode (where there's no input box) */
+  /* voice-hotkey tip — hidden in feed mode now that the command input is visible */
   #feedTip { display: none; }
   body.feedmode #feedTip {
-    display: block; margin: 8px 14px 2px; padding: 8px 11px;
+    display: none; margin: 8px 14px 2px; padding: 8px 11px;
     font-size: 11px; line-height: 1.5; color: rgba(190, 215, 255, 0.9);
     background: rgba(94,200,255,0.08); border: 1px solid var(--line); border-radius: 10px;
   }
@@ -676,6 +716,29 @@
     overflow-wrap: break-word; word-break: break-word; height: 34px;
   }
   footer #inp:focus { border-color: var(--accent); }
+  #mentionMenu {
+    display: none; position: fixed; z-index: 260; min-width: 210px; max-width: min(320px, calc(100vw - 24px));
+    max-height: 220px; overflow-y: auto; padding: 6px;
+    background: rgba(13, 19, 32, 0.98); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.62); backdrop-filter: blur(12px);
+  }
+  #mentionMenu.open { display: block; }
+  #mentionMenu .opt {
+    display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center;
+    padding: 7px 9px; border-radius: 8px; cursor: pointer;
+  }
+  #mentionMenu .opt:hover, #mentionMenu .opt.active { background: rgba(94,200,255,0.14); }
+  #mentionMenu .face {
+    width: 28px; height: 28px; border-radius: 7px; background-color: #1c2740;
+    outline: 1px solid rgba(255,255,255,0.12);
+  }
+  #mentionMenu b { display: block; color: var(--text); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mentionMenu small { display: block; color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mentionMenu .mrun {
+    justify-self: end; max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #9fdcff; border: 1px solid rgba(94,200,255,0.28); border-radius: 999px;
+    background: rgba(94,200,255,0.08); padding: 2px 6px; font-size: 10px; line-height: 1.25;
+  }
   /* The resting hint is small + subtle so the empty box stays compact; what you
      TYPE is full-size. (Mini window shrinks the hint a touch more.) */
   footer #inp::placeholder, .assistrow textarea::placeholder { font-size: 12px; opacity: 0.7; }
@@ -738,6 +801,10 @@
   .arow .meta b { font-size: 13px; display: block; }
   .arow .meta span { font-size: 11px; color: var(--dim); }
   .arow .meta .brain { font-size: 10.5px; color: rgba(94,200,255,0.85); }
+  .arow .meta .runtime { display: inline-block !important; font-size: 10.5px; color: #9fe7c3; margin-left: 7px; }
+  .arow .meta .runtime.codex { color: #ffd28a; }
+  .arow .meta .runtime.hermes { color: #c9b6ff; }
+  .arow .meta .runtime.claude { color: #9fe7c3; }
   /* Fixed-height rows: confirm messages swap in-place, never reflow the list */
   .arow .meta b, .arow .meta span {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
@@ -810,6 +877,31 @@
     border: 1px solid rgba(255,255,255,0.12); color: var(--dim); user-select: none;
   }
   .chk.on { color: var(--accent); border-color: var(--accent); background: rgba(94,200,255,0.1); }
+  .wslcfg {
+    flex: 1 1 100%; margin-top: 7px; padding: 8px; border-radius: 8px;
+    background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.08);
+    display: grid; grid-template-columns: minmax(170px, 1fr) minmax(120px, 180px) auto;
+    gap: 8px; align-items: center;
+  }
+  .wslcfg label { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text); font-size: 12px; cursor: pointer; }
+  .wslcfg small { display: block; margin-top: 2px; color: var(--dim); font-size: 10.5px; line-height: 1.3; }
+  .wslcfg input[type="text"] {
+    width: 100%; margin: 0; font: inherit; font-size: 12px; color: var(--text);
+    background: rgba(255,255,255,0.05); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; outline: none;
+  }
+  .wslcfg input[type="text"]:focus { border-color: var(--accent); }
+  .wslcfg .winbtn { position: static; opacity: 1; transform: none; }
+  @media (max-width: 620px) { .wslcfg { grid-template-columns: 1fr auto; } .wslcfg input[type="text"] { grid-column: 1 / -1; } }
+  .meetingHistoryList { display: grid; gap: 6px; max-height: 190px; overflow: auto; padding-right: 3px; }
+  .meetingHistoryItem {
+    padding: 7px 8px; border-radius: 8px; background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08); cursor: pointer;
+  }
+  .meetingHistoryItem.on { border-color: var(--accent); background: rgba(94,200,255,0.12); }
+  .meetingHistoryItem b { display: block; font-size: 12px; color: var(--fg); margin-bottom: 3px; }
+  .meetingHistoryItem span { display: block; font-size: 10.5px; color: var(--dim); margin-bottom: 4px; }
+  .meetingHistoryItem p { margin: 0; font-size: 11.5px; color: #cbd5e1; line-height: 1.35; }
   .autobadge { font-size: 9.5px; color: #ffd28a; border: 1px solid rgba(255,210,138,0.4); border-radius: 10px; padding: 1px 7px; margin-left: 6px; }
   .switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); margin-bottom: 10px; cursor: pointer; }
   .switch .knob { width: 34px; height: 18px; border-radius: 12px; background: rgba(255,255,255,0.12); position: relative; transition: background 0.15s; }
@@ -830,6 +922,15 @@
     font-size: 9px; font-weight: 700; color: #fff; white-space: nowrap;
     background: rgba(5, 9, 16, 0.8); padding: 1px 6px; border-radius: 6px; margin-top: 2px;
   }
+  .mapicon .worktag {
+    position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+    max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 9px; color: #dbeafe; background: rgba(5, 9, 16, 0.86);
+    border: 1px solid rgba(94,200,255,0.35); padding: 1px 6px; border-radius: 6px; margin-bottom: 3px;
+  }
+  .maplegend { display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px;color:var(--dim);font-size:11px }
+  .maplegend span { display:inline-flex;align-items:center;gap:4px }
+  .maplegend i { width:8px;height:8px;border-radius:50%;display:inline-block }
   /* ID card */
   #idcard { text-align: center; }
   #idcard .portrait {
@@ -883,7 +984,6 @@
   <button id="setBtn" title="Office settings — agents, roles" style="margin-left:6px">⚙</button>
   <button id="moreBtn" title="เพิ่มเติม" style="margin-left:6px">⋯</button>
   <button id="sideBtn" title="Security Center & Mission Control" style="margin-left:6px">🛡<span id="permBadge"></span></button>
-  <div class="winbtn" id="miniBtn" title="Mini window" style="margin-left:6px"></div>
   <div class="winbtn hide" id="hideBtn" title="Hide (chat head brings it back)">—</div>
 </header>
 <!-- ⋯ overflow menu: secondary tools, so the header never overflows -->
@@ -892,6 +992,7 @@
   <div class="opt" id="workflowBtn">🔀 <span>Workflow Builder</span></div>
   <div class="opt" id="toolshubBtn">🧰 <span>Tools Hub</span></div>
   <div class="opt" id="pluginshubBtn">🧩 <span>Plugins Hub</span></div>
+  <div class="opt" id="meetingsBtn">🗣 <span>会议记录</span></div>
   <div class="opt" id="editBtn">🎨 <span>จัดออฟฟิศ</span></div>
   <div class="opt" id="discussBtn">🗣 <span>ประชุม agents</span></div>
   <div class="opt" id="mapBtn">🗺 <span>แผนที่</span></div>
@@ -952,7 +1053,7 @@
   <span id="pttTxt">กำลังฟัง…</span>
   <span class="hint" id="pttHint"></span></div>
 
-<div id="threadBar">🧵 thread: <b id="threadName">ล่าสุด (ต่อเนื่องอัตโนมัติ)</b><span id="threadCtx" style="color:var(--dim);font-size:10.5px"></span></div>
+<div id="threadBar">🧵 thread: <b id="threadName">Latest (auto-continued)</b><span id="threadCtx" style="color:var(--dim);font-size:10.5px"></span></div>
 <div id="attachRow"></div>
 <!-- Speak bar for LIVE meetings only. Separate element + handler from send():
      send() hard-returns whenever groupView is set, so it can't be reused. -->
@@ -979,6 +1080,7 @@
 
 <div id="dayMenu"></div>
 <div id="sessMenu"></div>
+<div id="mentionMenu"></div>
 
 <!-- 📂 In-house folder picker (Blender-style) — no Windows dialogs. -->
 <div id="fsPick">
@@ -1110,11 +1212,99 @@
     "ล่าสุด (ต่อเนื่องอัตโนมัติ)": { en: "Latest (auto-continued)", zh: "最新（自动延续）", ja: "最新（自動継続）" },
     "▼ ดูทั้งหมด": { en: "▼ See all", zh: "▼ 查看全部", ja: "▼ すべて表示" },
     "▲ พับ": { en: "▲ Collapse", zh: "▲ 收起", ja: "▲ 折りたたむ" },
-    "ส่งแล้ว ✓": { en: "Sent ✓", zh: "已发送 ✓", ja: "送信済み ✓" },
-    "ทดสอบ": { en: "Test", zh: "测试", ja: "テスト" },
-    "เปลี่ยน": { en: "Change", zh: "更改", ja: "変更" },
-    // editor palette
-    "🪑 โต๊ะทำงาน": { en: "🪑 Desk", zh: "🪑 办公桌", ja: "🪑 デスク" },
+	    "ส่งแล้ว ✓": { en: "Sent ✓", zh: "已发送 ✓", ja: "送信済み ✓" },
+	    "ทดสอบ": { en: "Test", zh: "测试", ja: "テスト" },
+	    "เปลี่ยน": { en: "Change", zh: "更改", ja: "変更" },
+	    // dynamic office-log fragments rendered inside NO_I18N panes
+	    "แตกร่างขึ้น Ghost Deck": { en: "split onto the Ghost Deck", zh: "分身登上 Ghost Deck", ja: "Ghost Deckへ分身" },
+	    "งานเสร็จ ✓ กลับเข้าร่าง": { en: "task done ✓ merged back", zh: "任务完成 ✓ 已回归本体", ja: "完了 ✓ 本体へ戻りました" },
+	    "ล้มเหลว ✗ กลับเข้าร่าง": { en: "failed ✗ merged back", zh: "失败 ✗ 已回归本体", ja: "失敗 ✗ 本体へ戻りました" },
+	    "แตกร่าง": { en: "split into", zh: "分身出", ja: "分身" },
+	    "sub-agents → Ghost Deck": { en: "sub-agents → Ghost Deck", zh: "个 sub-agent → Ghost Deck", ja: "sub-agent → Ghost Deck" },
+	    "อนุญาต": { en: "allowed", zh: "已允许", ja: "許可" },
+	    "ปฏิเสธ": { en: "denied", zh: "已拒绝", ja: "拒否" },
+	    "เดินมาส่งสรุปงานแล้ว ↑": { en: "came over with the summary ↑", zh: "已带着工作汇报过来 ↑", ja: "報告を届けに来ました ↑" },
+	    "⏳ กำลังอัปเดต… โปรแกรมจะปิดและเปิดใหม่เอง (มีหน้าต่างอัปเดตเด้งขึ้นมา)": { en: "⏳ Updating… the app will close and reopen itself (an updater window will appear)", zh: "⏳ 正在更新… 程序会自动关闭并重新打开（会弹出更新窗口）", ja: "⏳ 更新中… アプリは自動で閉じて再起動します（更新ウィンドウが表示されます）" },
+	    "⚠️ อัปเดตยังไม่เริ่ม — เปิด Terminal แล้วรัน": { en: "⚠️ Update did not start — open Terminal and run", zh: "⚠️ 更新尚未开始 — 请打开终端并运行", ja: "⚠️ 更新が開始されません — Terminalを開いて実行してください" },
+	    "— อัปเดตได้จากแถบในหน้าแชท หรือ `bagidea update`": { en: "— update from the chat banner or `bagidea update`", zh: "— 可从聊天页横幅更新，或运行 `bagidea update`", ja: "— チャットのバナーまたは `bagidea update` で更新できます" },
+	    "เดินมารับคำสั่ง": { en: "coming to receive orders", zh: "正在前来接收指令", ja: "指示を受け取りに来ています" },
+	    "มี agent เขียนโน้ตบนกระดาน": { en: "An agent wrote notes on the board", zh: "有 agent 在看板上写了笔记", ja: "エージェントがボードにメモを書きました" },
+	    "⏹ หยุดงาน agent แล้ว — เปิดโปรเจคเข้าไปทำต่อได้เลย": { en: "⏹ Agent stopped — you can open the project and continue", zh: "⏹ Agent 已停止 — 现在可以打开项目继续处理", ja: "⏹ エージェントを停止しました — プロジェクトを開いて続行できます" },
+	    "✅ อนุมัติแล้ว — Director กำลังจัดทีม": { en: "✅ Approved — Director is assigning the team", zh: "✅ 已批准 — Director 正在安排团队", ja: "✅ 承認しました — Directorがチームを編成中" },
+	    "ส่งคำตอบให้ทีมแล้ว": { en: "Reply sent to the team", zh: "已把回复发送给团队", ja: "チームへ返信しました" },
+	    "เปิดเป็นหน้าต่างใหม่": { en: "Open in a new window", zh: "在新窗口打开", ja: "新しいウィンドウで開く" },
+	    "คลิกเพื่อดูภาพ · ปุ่ม ⤢ เปิดเป็นหน้าต่างใหม่": { en: "Click to view image · ⤢ opens it in a new window", zh: "点击查看图片 · ⤢ 在新窗口打开", ja: "クリックで画像を表示 · ⤢ で新しいウィンドウ" },
+	    "เปิดโฟลเดอร์ที่เก็บไฟล์": { en: "Open the containing folder", zh: "打开所在文件夹", ja: "保存先フォルダを開く" },
+	    "เปิดเป็นหน้าต่างใหม่ (โปรแกรมดูไฟล์ของเครื่อง)": { en: "Open in a new window (system file viewer)", zh: "在新窗口打开（系统文件查看器）", ja: "新しいウィンドウで開く（システムのビューア）" },
+	    "คุณ": { en: "You", zh: "你", ja: "あなた" },
+	    "แก้ไข": { en: "Edit", zh: "编辑", ja: "編集" },
+	    "นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง": { en: "This is you. Assign work here and the Director will come receive it.", zh: "这是你本人。在这里下达任务，Director 会来接收指令。", ja: "これはあなたです。ここで依頼するとDirectorが受け取りに来ます。" },
+	    "🛡 ขอใช้": { en: "🛡 Requesting access to", zh: "🛡 请求使用", ja: "🛡 使用リクエスト" },
+	    "ตลอดไป": { en: "Always", zh: "始终允许", ja: "常に許可" },
+	    "ไม่": { en: "No", zh: "否", ja: "いいえ" },
+	    "✓ อนุญาตอัตโนมัติ (ตามสิทธิ์ที่ให้ไว้)": { en: "✓ Auto-allowed by saved permission", zh: "✓ 已按保存的权限自动允许", ja: "✓ 保存済み権限で自動許可" },
+	    "✓ อนุญาตแล้ว": { en: "✓ Allowed", zh: "✓ 已允许", ja: "✓ 許可しました" },
+	    "✗ หมดเวลา — ปฏิเสธอัตโนมัติ": { en: "✗ Timed out — auto-denied", zh: "✗ 已超时 — 自动拒绝", ja: "✗ タイムアウト — 自動拒否" },
+	    "✗ ไม่อนุญาต": { en: "✗ Denied", zh: "✗ 已拒绝", ja: "✗ 拒否しました" },
+	    "👻 แตกร่างรับงาน:": { en: "👻 Clone took task:", zh: "👻 分身接到任务：", ja: "👻 分身がタスクを受領:" },
+	    "✓ งานเสร็จ กลับเข้าร่าง": { en: "✓ Task done, merged back", zh: "✓ 任务完成，已回归本体", ja: "✓ 完了、本体へ戻りました" },
+	    "✗ ล้มเหลว": { en: "✗ Failed", zh: "✗ 失败", ja: "✗ 失敗" },
+	    "✓ งานเสร็จ": { en: "✓ Task done", zh: "✓ 任务完成", ja: "✓ 完了" },
+	    "✗ งานล้มเหลว": { en: "✗ Task failed", zh: "✗ 任务失败", ja: "✗ タスク失敗" },
+	    "🧠 จดความจำใหม่": { en: "🧠 Saved new memory", zh: "🧠 已记录新记忆", ja: "🧠 新しい記憶を保存" },
+	    "ข้อ": { en: "items", zh: "条", ja: "件" },
+	    "🛡 จำสิทธิ์แล้ว — เครื่องมือนี้จะไม่ถามซ้ำสำหรับ agent นี้": { en: "🛡 Permission remembered — this tool will not ask again for this agent", zh: "🛡 已记住权限 — 该工具不会再向此 agent 询问", ja: "🛡 権限を記憶しました — このエージェントでは再確認しません" },
+	    "🛡 การ์ดนี้หมดอายุไปแล้ว (คำขอถูกปิดไปก่อนหน้า)": { en: "🛡 This card has expired (the request was already closed)", zh: "🛡 此卡片已过期（请求此前已关闭）", ja: "🛡 このカードは期限切れです（リクエストは既に閉じられました）" },
+	    "งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย": { en: "Sub-agent work (read-only) — click an agent in the rail to resume chat", zh: "sub-agent 工作记录（只读）— 点击 rail 中的 agent 返回聊天", ja: "sub-agentの作業（読み取り専用）— railのagentをクリックして戻る" },
+	    "บันทึกการประชุม (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย": { en: "Meeting log (read-only) — click an agent in the rail to resume chat", zh: "会议记录（只读）— 点击 rail 中的 agent 返回聊天", ja: "会議ログ（読み取り専用）— railのagentをクリックして戻る" },
+	    "🆕 thread ใหม่ — เริ่มเมื่อส่งข้อความแรก": { en: "🆕 New thread — starts when you send the first message", zh: "🆕 新 thread — 发送第一条消息时开始", ja: "🆕 新しいthread — 最初のメッセージ送信時に開始" },
+	    "ยังไม่มี — จะสร้างให้เองเมื่อคุยครั้งแรก": { en: "None yet — one will be created when you first chat", zh: "暂无 — 首次聊天时会自动创建", ja: "まだありません — 最初の会話時に作成されます" },
+	    "ล่าสุด": { en: "Latest", zh: "最新", ja: "最新" },
+	    "ความจำใหม่ ไม่ต่อจากของเดิม": { en: "Fresh memory, not continued from the old one", zh: "全新记忆，不延续旧内容", ja: "新しい記憶、以前の続きではありません" },
+	    "(ยังไม่มี thread เก่า — คุยครั้งแรกจะสร้างให้เอง)": { en: "(no old threads yet — the first chat creates one)", zh: "（暂无旧 thread — 第一次聊天会自动创建）", ja: "（過去threadなし — 最初の会話で作成）" },
+	    "—  🗣 การประชุม  —": { en: "—  🗣 Meetings  —", zh: "—  🗣 会议  —", ja: "—  🗣 会議  —" },
+	    "ร่างแยกของ": { en: "clone of", zh: "分身来自", ja: "分身元" },
+	    "✓ สำเร็จ": { en: "✓ done", zh: "✓ 成功", ja: "✓ 成功" },
+	    "⏳ กำลังทำ": { en: "⏳ running", zh: "⏳ 进行中", ja: "⏳ 実行中" },
+	    "กำลัง": { en: "Doing", zh: "正在", ja: "実行中" },
+	    "กำลังใช้": { en: "Using", zh: "正在使用", ja: "使用中" },
+	    "กำลังใช้ปลั๊กอิน": { en: "Using plugin", zh: "正在使用插件", ja: "プラグイン使用中" },
+	    "ทำงานอยู่…": { en: "Working…", zh: "工作中…", ja: "作業中…" },
+	    "กำลังทำงาน…": { en: "Working…", zh: "工作中…", ja: "作業中…" },
+	    "กำลังทำ %n งาน": { en: "Running %n task(s)", zh: "正在执行 %n 个任务", ja: "%n 件実行中" },
+	    "กำลังคิดและวางแผน…": { en: "Thinking and planning…", zh: "正在思考和规划…", ja: "考え中・計画中…" },
+	    "กำลังรับคำสั่ง…": { en: "Receiving the instruction…", zh: "正在接收指令…", ja: "指示を受信中…" },
+	    "ยกเลิกงานนี้": { en: "Cancel this task", zh: "取消这个任务", ja: "このタスクをキャンセル" },
+	    "กำลังฟัง… พูดได้เลย": { en: "Listening… speak now", zh: "正在聆听… 请说", ja: "聞いています…話してください" },
+	    "⏳ กำลังถอดเสียง…": { en: "⏳ Transcribing…", zh: "⏳ 正在转写…", ja: "⏳ 文字起こし中…" },
+	    "📞 กำลังเชื่อมต่อสายสด…": { en: "📞 Connecting live call…", zh: "📞 正在连接实时通话…", ja: "📞 ライブ通話に接続中…" },
+	    "🏁 กำลังจบ…": { en: "🏁 Ending…", zh: "🏁 正在结束…", ja: "🏁 終了中…" },
+	    "🧪 กำลังเชื่อมต่อ…": { en: "🧪 Connecting…", zh: "🧪 连接中…", ja: "🧪 接続中…" },
+	    "🔴 LIVE meeting — พิมพ์เข้าวงประชุม": { en: "🔴 LIVE meeting — type into the meeting", zh: "🔴 会议直播中 — 输入内容加入会议", ja: "🔴 LIVE meeting — 会議へ入力" },
+	    "⏸ พักวงประชุม": { en: "⏸ Meeting paused", zh: "⏸ 会议已暂停", ja: "⏸ 会議を一時停止中" },
+	    "🖥 คุณเปิดทำงานอยู่": { en: "🖥 You have it open", zh: "🖥 你正在打开工作", ja: "🖥 開いて作業中" },
+	    "🫥 ของคุณทำงานเบื้องหลัง": { en: "🫥 Yours is running in the background", zh: "🫥 你的窗口在后台运行", ja: "🫥 バックグラウンドで実行中" },
+	    "กำลังทำงาน": { en: "is working", zh: "正在工作", ja: "作業中" },
+	    "⚪ ปิด — ไม่มีใครทำงาน": { en: "⚪ Closed — nobody is working", zh: "⚪ 已关闭 — 暂无人工作", ja: "⚪ 閉じています — 作業者なし" },
+	    "🔴 กำลังทำงานนี้อยู่…": { en: "🔴 Running this job…", zh: "🔴 正在执行这个任务…", ja: "🔴 このジョブを実行中…" },
+	    " · ⏸ พัก": { en: " · ⏸ Paused", zh: " · ⏸ 暂停", ja: " · ⏸ 一時停止" },
+	    " · ล่าสุด ": { en: " · latest ", zh: " · 最近 ", ja: " · 最新 " },
+	    "คุยเสียงสด (realtime)": { en: "Live voice chat (realtime)", zh: "实时语音聊天", ja: "ライブ音声チャット（realtime）" },
+	    "กด 📞 อีกครั้งเพื่อวางสาย": { en: "Press 📞 again to hang up", zh: "再次按 📞 挂断", ja: "📞 をもう一度押して終了" },
+	    "กด 📞 เพื่อวางสาย": { en: "Press 📞 to hang up", zh: "按 📞 挂断", ja: "📞 で終了" },
+	    "⏹ ยืนยันหยุด?": { en: "⏹ Confirm stop?", zh: "⏹ 确认停止？", ja: "⏹ 停止しますか？" },
+	    "⏹ หยุด agent": { en: "⏹ Stop agent", zh: "⏹ 停止 agent", ja: "⏹ agentを停止" },
+	    "ออฟฟิศเต็มแล้ว — สูงสุด": { en: "Office is full — max", zh: "办公室已满 — 上限", ja: "オフィス満員 — 上限" },
+	    "คน (ใช้การแตกร่างผีสำหรับงานขนาน)": { en: "people (use ghost clones for parallel work)", zh: "人（并行工作请用幽灵分身）", ja: "人（並列作業はゴースト分身を使用）" },
+	    "ออฟฟิศเต็ม": { en: "Office full", zh: "办公室已满", ja: "オフィス満員" },
+	    "ปิดการเปิดอัตโนมัติแล้ว": { en: "Auto-start turned off", zh: "已关闭自动启动", ja: "自動起動をオフにしました" },
+	    "เลือกเสียงก่อนนะ": { en: "Pick a voice first", zh: "先选一个声音", ja: "先に音声を選んでください" },
+	    "✅ ติดตั้ง plugin แล้ว": { en: "✅ Plugin installed", zh: "✅ 插件已安装", ja: "✅ プラグインをインストールしました" },
+	    "📦 กำลังติดตั้ง plugin…": { en: "📦 Installing plugin…", zh: "📦 正在安装插件…", ja: "📦 プラグインをインストール中…" },
+	    "✗ ตั้งค่าไม่สำเร็จ": { en: "✗ Settings failed", zh: "✗ 设置失败", ja: "✗ 設定に失敗しました" },
+	    "คลิกเพื่อเอาออก": { en: "Click to remove", zh: "点击移除", ja: "クリックで削除" },
+	    // editor palette
+	    "🪑 โต๊ะทำงาน": { en: "🪑 Desk", zh: "🪑 办公桌", ja: "🪑 デスク" },
     "🍽 โต๊ะกลม": { en: "🍽 Round table", zh: "🍽 圆桌", ja: "🍽 丸テーブル" },
     "💺 เก้าอี้": { en: "💺 Chair", zh: "💺 椅子", ja: "💺 椅子" },
     "📚 ชั้นวาง": { en: "📚 Shelf", zh: "📚 书架", ja: "📚 棚" },
@@ -1150,9 +1340,230 @@
   function tr(s) { if (LANG === "th" || !s) return s; return TR[String(s).trim()] || s; }
   const t = tr;  // back-compat for inline ${t(...)} uses
 
+  // Some settings strings are assembled dynamically (Thai fragment + provider
+  // name + status), so exact-key i18n cannot catch them. Keep a small local
+  // zh fragment dictionary for chrome text only; user/chat content is skipped
+  // by NO_I18N below.
+  const PHRASE_ZH = {
+    "ค้นหา": "搜索",
+    "เพิ่ม": "添加",
+    "ยังไม่ได้เลือก": "尚未选择",
+    "ไม่พบ": "未找到",
+    "ยังไม่ได้ตั้ง": "未设置",
+    "จะใช้ไม่ได้": "将不可用",
+    "ขอ key:": "获取 key:",
+    "ทดสอบว่า key ใช้งานได้จริง": "测试 key 是否可用",
+    "ทดสอบใหม่": "重新测试",
+    "เปลี่ยน key": "更换 key",
+    "เปลี่ยน key ใหม่": "更换新 key",
+    "วาง key ใหม่…": "粘贴新 key…",
+    "วาง key…": "粘贴 key…",
+    "วาง API key…": "粘贴 API key…",
+    "ยังไม่มี key เพิ่มเติม": "暂无附加 key",
+    "ลบ key": "删除 key",
+    "บันทึก": "保存",
+    "🧪 กำลังทดสอบ…": "🧪 测试中…",
+    "🧪 กำลังเชื่อมต่อ…": "🧪 连接中…",
+    "เชื่อมต่อไม่สำเร็จ": "连接失败",
+    "เชื่อมต่อแล้ว · ใช้ API key": "已连接 · 使用 API key",
+    "เชื่อมต่อแล้ว · ใช้ subscription login": "已连接 · 使用订阅登录",
+    "ยังไม่ได้เชื่อมต่อ — Login หรือใส่ API key": "未连接 — 登录或输入 API key",
+    "ยังไม่ได้เชื่อมต่อ — กด Connect": "未连接 — 点击 Connect",
+    "ยังไม่ได้เชื่อมต่อ": "未连接",
+    "เชื่อมต่อแล้ว": "已连接",
+    "(proxy ในตัว)": "（内置代理）",
+    "เปลี่ยนไปใช้ API key": "改用 API key",
+    "ลบ key (กลับไปใช้ subscription)": "移除 key（改回订阅）",
+    "ลบ provider": "删除 provider",
+    "ตัดการเชื่อมต่อ": "断开连接",
+    "หรือวาง API key…": "或粘贴 API key…",
+    "ใช้ API key": "使用 API key",
+    "เปิดเทอร์มินัลให้ login แล้ว — ทำตามขั้นตอนในหน้าต่างนั้น แล้วกลับมากด 🔄": "已打开终端用于登录 — 在该窗口完成步骤后回来点击 🔄",
+    "ใช้ config/login ของ": "使用",
+    "เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES": "自己的 config/login · 可在 AGENTS 页面为 agent 设置，或在 ROLES 中设模板",
+    "ต่อตรง (Anthropic-compatible)": "直连（Anthropic 兼容）",
+    "ผ่าน proxy (OpenAI-compatible)": "通过代理（OpenAI 兼容）",
+    "Local (ในเครื่อง · ฟรี · ไม่ต้องใช้ key)": "Local（本机 · 免费 · 不需要 key）",
+    "ในเครื่อง · ฟรี · ไม่ต้องใช้ key": "本机 · 免费 · 不需要 key",
+    "เปิด Ollama แล้วกด Connect": "打开 Ollama 后点击 Connect",
+    "เปิด server แล้วกด Connect": "启动 server 后点击 Connect",
+    "Custom — เพิ่ม provider เอง": "自定义 — 添加 provider",
+    "ชื่อ provider": "provider 名称",
+    "เช่น": "例如",
+    "＋ เพิ่ม + Connect": "＋ 添加 + Connect",
+    "🎤 ถอดเสียง (Whisper) · 🖼 สร้างภาพ": "🎤 语音转文字（Whisper）· 🖼 生成图片",
+    "🎤 ถอดเสียง · 🗣 เสียงพูด agents · 📞 realtime · 🖼 สร้างภาพ": "🎤 语音转文字 · 🗣 agent 语音 · 📞 实时通话 · 🖼 生成图片",
+    "สร้าง bot กับ @BotFather แล้ววาง token — ใช้ได้ทันที ไม่ต้องมี public URL": "用 @BotFather 创建 bot 后粘贴 token — 可直接使用，不需要公网 URL",
+    "Bot token จาก @BotFather": "来自 @BotFather 的 Bot token",
+    "(ไม่บังคับ) chat id ของคุณ — จำกัดให้คุยได้คนเดียว": "（可选）你的 chat id — 限定只与你对话",
+    "สร้าง bot ที่ discord.com/developers (เปิด MESSAGE CONTENT INTENT) แล้วเชิญเข้า server": "在 discord.com/developers 创建 bot（开启 MESSAGE CONTENT INTENT）并邀请进 server",
+    "(ไม่บังคับ) channel id — จำกัดห้อง": "（可选）channel id — 限定频道",
+    "Messaging API: ตั้ง webhook ชี้มาที่": "Messaging API: 设置 webhook 指向",
+    "Slack app: เปิด Event Subscriptions แล้วชี้ Request URL มาที่": "Slack app: 开启 Event Subscriptions，并将 Request URL 指向",
+    "WhatsApp Cloud API (Meta): ตั้ง Callback URL": "WhatsApp Cloud API (Meta): 设置 Callback URL",
+    "Facebook Page (Meta): ตั้ง Callback URL": "Facebook Page (Meta): 设置 Callback URL",
+    "verify token ด้านล่าง": "下方的 verify token",
+    "ตั้ง webhook ชี้มาที่": "设置 webhook 指向",
+    "ผ่าน public HTTPS": "通过公网 HTTPS",
+    "ตรวจลายเซ็น": "校验签名",
+    "ตรวจลายเซ็น webhook": "校验 webhook 签名",
+    "ตั้งเองให้ตรงกับ Meta": "自行设置，需与 Meta 一致",
+    "💾 บันทึก + เชื่อมต่อ": "💾 保存 + 连接",
+    "🔊 Sound effects — เสียงประกอบในโลก office": "🔊 Sound effects — 办公室环境音效",
+    "🗣 Agent voices — เสียงพูดของ agents (ต้องมี Gemini key)": "🗣 Agent voices — agent 语音（需要 Gemini key）",
+    "🚀 Start at login — เปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ": "🚀 Start at login — 登录时自动启动办公室",
+    "🔄 Update checks — แจ้งเตือนเมื่อมีเวอร์ชันใหม่": "🔄 Update checks — 有新版本时提醒",
+    "💓 DIRECTOR HEARTBEAT — รอบตรวจภาพรวม/ตารางงาน (แจ้งเฉพาะที่ควรรู้)": "💓 DIRECTOR HEARTBEAT — 概览/日程检查周期（只提醒重要事项）",
+    "☕ SOCIAL — agents ว่างๆ จับกลุ่มคุย/หยอกล้อกันเอง (อาจเสนอโปรเจคให้คุณอนุมัติ)": "☕ SOCIAL — agent 空闲时组队闲聊/互动（可能向你提出项目建议）",
+    "💡 PROPOSALS — เว้นระยะอย่างน้อยเท่าไรต่อข้อเสนอโปรเจคที่ส่งถึงคุณ (กันเสนอถี่เกินไป)": "💡 PROPOSALS — 向你发送项目建议的最小间隔（防止过于频繁）",
+    "🎤 HOTKEY สั่งงานด้วยเสียง — กดค้าง = พูด · ปล่อย = ถอดเสียง + ส่งหา Director (ถอดด้วย Whisper/Gemini จาก key ใน CONNECT)": "🎤 语音指令热键 — 按住说话 · 松开后转文字并发送给 Director（使用 CONNECT 中的 Whisper/Gemini key）",
+    "🎙 ไมโครโฟน (input) — อุปกรณ์ที่ใช้รับเสียงพูดของคุณ": "🎙 麦克风（输入）— 用来接收你语音的设备",
+    "🔊 ลำโพง (output) — เสียงพูดของ agents และเสียงประกอบออกทางนี้": "🔊 扬声器（输出）— agent 语音和音效从这里输出",
+    "Right Ctrl (แนะนำ)": "Right Ctrl（推荐）",
+    "ปิด": "关闭",
+    "ทุก 15 นาที": "每 15 分钟",
+    "ทุก 30 นาที": "每 30 分钟",
+    "ทุก 1 ชั่วโมง": "每 1 小时",
+    "~ทุก 30 นาที": "约每 30 分钟",
+    "~ทุก 1 ชั่วโมง": "约每 1 小时",
+    "~ทุก 2 ชั่วโมง": "约每 2 小时",
+    "ไม่จำกัด": "不限制",
+    "อย่างน้อยทุก 1 ชั่วโมง": "至少每 1 小时",
+    "อย่างน้อยทุก 2 ชั่วโมง": "至少每 2 小时",
+    "อย่างน้อยทุก 4 ชั่วโมง": "至少每 4 小时",
+    "แนะนำ": "推荐",
+    "ปิดคีย์ลัด": "关闭快捷键",
+    "ค่าเริ่มต้นของระบบ": "系统默认",
+    "🔍 ค้นหา agent…": "🔍 搜索 agent…",
+    "🔍 ค้นหา skill…": "🔍 搜索技能…",
+    "🔍 ค้นหาเครื่องมือ / MCP server…": "🔍 搜索工具 / MCP server…",
+    "⚡ SYSTEM TOOLS — ความสามารถกลางของออฟฟิศ (agents เรียกใช้เองได้)": "⚡ SYSTEM TOOLS — 办公室的公共能力（agent 可自行调用）",
+    "🔧 BUILT-IN — เครื่องมือมาตรฐานของ Claude (ลบไม่ได้ · เปิด/ปิดรายตัวในหน้าแก้ไข agent)": "🔧 BUILT-IN — Claude 标准工具（不可删除，可在 agent 编辑页逐个开关）",
+    "🔌 MCP SERVERS — เพิ่มความสามารถใหม่ตามมาตรฐาน MCP": "🔌 MCP SERVERS — 按 MCP 标准添加新能力",
+    "ใส่ชื่อ + คำสั่งรัน server แล้ว assign ให้ agent ในหน้าแก้ไข เช่น": "输入名称 + server 启动命令，然后在 agent 编辑页分配，例如",
+    "คุมเบราว์เซอร์": "控制浏览器",
+    "หาเพิ่มได้จาก github.com/modelcontextprotocol/servers": "可在 github.com/modelcontextprotocol/servers 查找更多",
+    "ชื่อ เช่น github": "名称，例如 github",
+    "คำสั่งรัน เช่น npx -y @modelcontextprotocol/server-github": "启动命令，例如 npx -y @modelcontextprotocol/server-github",
+    "ตรวจงานก่อนส่ง CEO: reviewer เช็คงานที่มอบหมาย แล้วให้แก้ 1 รอบถ้าเจอปัญหา (ช้าลง+ใช้ token เพิ่ม)": "发送给 CEO 前先检查：reviewer 会检查已分配任务，发现问题时要求修正 1 轮（更慢且消耗更多 token）",
+    "🚀 จะเปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ": "🚀 登录时将自动打开办公室",
+    "สร้างใหม่ / โดย agents": "新建 / 由 agents 创建",
+    "มากับระบบ (ลบ/แก้ไม่ได้)": "系统内置（不可删除/编辑）",
+    "🎤 ถอดเสียงพูด (voice → text)": "🎤 语音转文字（voice → text）",
+    "🗣 เสียงพูดของ agents (TTS)": "🗣 agent 语音（TTS）",
+    "🖼 สร้างภาพ AI": "🖼 生成 AI 图片",
+    "agents เรียก /gen/image เองได้ · ภาพโชว์ในแชท": "agents 可自行调用 /gen/image · 图片会显示在聊天中",
+    "คุยเสียงสดกับออฟฟิศ": "与办公室实时语音聊天",
+    "หรือ": "或",
+    "ต้องมี main key:": "需要 main key:",
+    "— คลิกเพื่อไปตั้งค่า": "— 点击前往设置",
+    "⭐ MAIN API KEYS — กุญแจหลักของโปรแกรม (ปลดล็อกฟีเจอร์เสียง · TTS · รูปภาพ · realtime)": "⭐ MAIN API KEYS — 程序主 key（解锁语音、TTS、图片、实时通话）",
+    "🔑 API KEYS เพิ่มเติม — ฉีดเข้า env ของ agent ทุกตัว (เช่น GEMINI2 ให้ agents ใช้แยกจาก key หลัก)": "🔑 附加 API KEYS — 注入所有 agent 的环境变量（如 GEMINI2，供 agent 与主 key 分开使用）",
+    "ชื่อ เช่น GEMINI2": "名称，例如 GEMINI2",
+    "ค่า key (เก็บในเครื่องเท่านั้น)": "key 值（仅保存在本机）",
+    "🧠 MODELS / PROVIDERS — สมองของ agent (วาง key แล้วกด Connect · ตั้ง provider ต่อ agent ในหน้า AGENTS)": "🧠 MODELS / PROVIDERS — agent 的大脑（粘贴 key 后点击 Connect；在 AGENTS 页面为每个 agent 设置 provider）",
+    "📡 คุยกับออฟฟิศจากภายนอกผ่าน Director (main) — เปิดช่องทางที่ต้องการ แล้วสั่งงานจากมือถือได้เลย": "📡 通过 Director (main) 从外部与办公室沟通 — 开启需要的渠道后即可用手机下指令",
+    "Telegram ใช้ได้ทันที · ที่เหลือ ตั้ง webhook ผ่าน public HTTPS เช่น cloudflared": "Telegram 可直接使用；其他渠道需通过公网 HTTPS（如 cloudflared）设置 webhook",
+    "ความจำสนทนาแยกตามตัว agent — คำสั่งผ่าน CEO จะอยู่กับ Claude (Director)": "对话记忆按 agent 分开；通过 CEO 下达的指令会归到 Claude（Director）",
+    "ส่วนวงประชุม 🗣 ไม่สร้าง thread · ลบ thread = agent ลืมเรื่องนั้น": "会议 🗣 不创建普通 thread；删除 thread = agent 忘记该话题",
+    "⚙ DEFAULT RUNTIME — role/agent ไม่ได้ตั้งไว้จะใช้ตัวนี้": "⚙ DEFAULT RUNTIME — role/agent 未单独设置时使用这里",
+    "ปุ่มไมค์ / Right Ctrl": "麦克风按钮 / Right Ctrl",
+    "พรีวิวใน editor": "在编辑器中预览",
+    "ต้องมี main key:": "需要 main key:",
+    "คลิกเพื่อไปตั้งค่า": "点击前往设置",
+    "ยังไม่มี thread เลย": "还没有 thread",
+    "🗣 การประชุม (group sessions)": "🗣 会议（group sessions）",
+    "Sub-agents (ร่างแยก)": "Sub-agents（分身）",
+    "ครั้ง": "次",
+    "ร่างแยกของ": "分身来自",
+    "✗ ล้มเหลว": "✗ 失败",
+    "✓ สำเร็จ": "✓ 成功",
+    "หัวหน้าทีม (Lead)": "负责人（Lead）",
+    "ทีมงาน (Staff)": "成员（Staff）",
+    "🔒 skill พื้นฐานของระบบ — แก้ไข/ลบไม่ได้ (กำหนดไว้ให้ถูกต้องแล้ว)": "🔒 系统基础技能 — 不可编辑/删除（已正确配置）",
+    "DESCRIPTION (ให้ agent รู้ว่าควรหยิบใช้เมื่อไหร่)": "DESCRIPTION（告诉 agent 何时使用该技能）",
+    "SKILL CONTENT — ขั้นตอน / วิธีทำ": "SKILL CONTENT — 步骤 / 做法",
+    "✨ AURA — วงแสงเวทย์ใต้เท้า (ของตกแต่ง)": "✨ AURA — 脚下光环（装饰）",
+    "🏢 ระดับในองค์กร": "🏢 组织层级",
+    "⚙ RUNTIME + 🧠 สมอง (โมเดล/ผู้ให้บริการ)": "⚙ RUNTIME + 🧠 大脑（模型/provider）",
+    "โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)": "模型（留空 = provider 默认）",
+    "⚠ ยังไม่ได้เชื่อมต่อ provider นี้": "⚠ 该 provider 尚未连接",
+    "🔗 ไปหน้า CONNECT": "🔗 前往 CONNECT",
+    "Claude ใช้ login/แผนเดิม · เจ้าอื่นใช้ key แยก (ประหยัดกว่า)": "Claude 使用原登录/套餐；其他 provider 使用单独 key（更省）",
+    "✨ PERSONA COPILOT — บอกสั้นๆ ว่าอยากได้ agent แบบไหน (เติมให้ทุกช่อง)": "✨ PERSONA COPILOT — 简短描述想要什么样的 agent（自动补全所有字段）",
+    "แล้วกด": "然后点击",
+    "SYSTEM PROMPT — ตัวตนและภารกิจหลัก": "SYSTEM PROMPT — 身份和主要任务",
+    "🛠 ความเชี่ยวชาญ / ขอบเขตงาน": "🛠 专长 / 工作范围",
+    "ออกแบบ UI/UX": "UI/UX 设计",
+    "สี-ฟอนต์-spacing": "颜色-字体-spacing",
+    "🎭 บุคลิก / น้ำเสียง": "🎭 性格 / 语气",
+    "เป็นกันเอง": "友好",
+    "ขี้เล่นนิดๆ": "略带幽默",
+    "ตอบกระชับ": "回答简洁",
+    "ใช้อีโมจิบ้าง": "适度使用 emoji",
+    "🗣 ภาษาหลักที่ใช้ตอบ": "🗣 主要回复语言",
+    "ไทย": "中文",
+    "ตามภาษาของผู้ใช้": "跟随用户语言",
+    "📏 กฎการทำงาน (do / don't — บรรทัดละข้อ)": "📏 工作规则（do / don't — 每行一条）",
+    "ตรวจข้อมูลจากแหล่งจริงก่อนตอบเสมอ": "回答前始终从真实来源核查信息",
+    "ห้ามเดาตัวเลข": "禁止猜测数字",
+    "🗣 เสียงพูด (TTS) — กิมมิคประกาศงานสำคัญ · ▶ ฟังตัวอย่างก่อนเลือกได้": "🗣 语音（TTS）— 用于播报重要任务 · 可先按 ▶ 试听",
+    "ฟังตัวอย่างเสียงนี้": "试听这个声音",
+    "🔧 TOOLS (ว่าง = ชุดอ่านอย่างเดียว Read/Glob/Grep)": "🔧 TOOLS（留空 = 只读工具集 Read/Glob/Grep）",
+    "นักออกแบบ UI เน้น minimal พูดติดตลก": "偏 minimal、说话幽默的 UI 设计师",
+    "นี่คือตัวคุณเองในออฟฟิศ — ไม่มี prompt/skills เพราะคุณคือคนสั่ง ไม่ใช่ AI 😄": "这是你在办公室里的化身 — 没有 prompt/skills，因为你是下指令的人，不是 AI 😄",
+    "คุณคือคนสั่ง ไม่ใช่ AI": "你是下指令的人，不是 AI",
+    "เลือกหน้าตากับชื่อได้ตามใจ": "可以按喜好选择外观和名字",
+    "พิมพ์ชื่อโมเดลเองได้": "也可以手动输入模型名",
+    "🗣 เสียงพูดต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT": "🗣 语音需要 GEMINI_API_KEY — 请在 ⚙ CONNECT 中设置",
+  };
+  function phraseFallback(s) {
+    if (LANG !== "zh" || !s || !THAI.test(s)) return s;
+    let out = String(s);
+    const keys = Object.keys(PHRASE_ZH).sort((a, b) => b.length - a.length);
+    for (const k of keys) out = out.split(k).join(PHRASE_ZH[k]);
+    return out;
+  }
+
   // Dynamic content (chat, feed, agent names, thread titles, live counters)
   // must NOT be machine-translated — only UI chrome. Skip these subtrees.
   const NO_I18N = new Set(["log", "feed", "feedTasks", "rail", "companion", "nowStrip", "threadName", "pttTxt", "inp"]);
+  const ACTIVITY_FILTER = {
+    showFeed(ev) {
+      if (!ev || ev.replay || ev.theater) return false;
+      if (ev.type === "chat.message") return false;
+      if (ev.type === "task.progress") return false;
+      if (ev.type === "task.started" && /^📨\s*Report from\b/i.test(String(ev.title || ""))) return false;
+      return new Set([
+        "task.started", "task.progress", "task.completed", "task.failed", "task.delegated",
+        "subagent.progress", "subagent.spawned", "subagent.done", "subagent.split",
+        "perm.requested", "perm.approved", "perm.denied",
+        "ceo.summon", "ceo.report", "collab.started", "collab.ended",
+        "skill.created", "memory.learned", "channel.message",
+        "proposal.created", "proposal.approved", "proposal.rejected",
+        "voice.say", "update.available",
+      ]).has(ev.type);
+    },
+    showThread(row) {
+      return !!row && !row.social && !row.ambient;
+    },
+  };
+  function taskTitleVisible(title) {
+    const s = String(title || "").trim();
+    if (!s) return "";
+    if (/^📨\s*Report from\b/i.test(s)) return "";
+    if (s === "💓 Health check") return "";
+    return s;
+  }
+  function friendlyFailureReason(reason, runtime) {
+    const s = String(reason || "");
+    const rt = String(runtime || "").toLowerCase();
+    if (/spawn\s+hermes\s+ENOENT/i.test(s)) return "Hermes CLI 未找到，请先安装 Hermes 或把该 agent 切回 Claude/Codex";
+    if (/spawn\s+codex\s+ENOENT/i.test(s)) return "Codex CLI 未找到，请先安装 Codex 或开启 WSL bridge";
+    if (/spawn\s+claude\s+ENOENT/i.test(s)) return "Claude Code CLI 未找到，请检查 Claude/WSL 配置";
+    if (/ENOENT/i.test(s) && rt) return `${runtimeName(rt)} CLI 未找到`;
+    return s ? s.slice(0, 120) : "";
+  }
   function inNoI18n(node) {
     let el = node.nodeType === 1 ? node : node.parentElement;
     while (el) { if (el.id && NO_I18N.has(el.id)) return true; el = el.parentElement; }
@@ -1171,6 +1582,11 @@
       const raw = n.nodeValue, key = raw.trim();
       if (!key) continue;
       if (TR[key]) hits.push([n, raw.replace(key, TR[key])]);
+      else if (LANG === "zh" && THAI.test(key)) {
+        const fb = phraseFallback(key);
+        if (fb !== key) hits.push([n, raw.replace(key, fb)]);
+        else _pending.add(key);
+      }
       else if (THAI.test(key)) _pending.add(key);
     }
     for (const [node, val] of hits) node.nodeValue = val;
@@ -1181,6 +1597,11 @@
       const v = el.getAttribute && el.getAttribute(a); if (!v) continue;
       const key = v.trim();
       if (TR[key]) el.setAttribute(a, TR[key]);
+      else if (LANG === "zh" && THAI.test(key)) {
+        const fb = phraseFallback(key);
+        if (fb !== key) el.setAttribute(a, fb);
+        else _pending.add(key);
+      }
       else if (THAI.test(key)) _pending.add(key);
       }
     }
@@ -1213,8 +1634,12 @@
   // so the sweep settles to near-zero work once the cache is warm.
   if (LANG !== "th") {
     const _obs = new MutationObserver((muts) => {
-      for (const m of muts) for (const nd of m.addedNodes)
-        if (nd.nodeType === 1 && !inNoI18n(nd)) applyI18n(nd);
+      for (const m of muts) {
+        if (m.type === "characterData") applyI18n(m.target.parentElement || document.body);
+        for (const nd of m.addedNodes)
+          if (nd.nodeType === 1 && !inNoI18n(nd)) applyI18n(nd);
+          else if (nd.nodeType === 3 && !inNoI18n(nd)) applyI18n(nd.parentElement || document.body);
+      }
     });
     // Pull the whole seeded map for this language ONCE up front, so the very
     // first paint is already translated (no Thai flash) and tr() knows every
@@ -1231,12 +1656,16 @@
     }
     addEventListener("DOMContentLoaded", async () => {
       await preloadSeed();
+      try {
+        const ptt = document.getElementById("pttTxt");
+        if (ptt) ptt.textContent = tr("กำลังฟัง…");
+      } catch {}
       applyI18n(document.body);
       // tr()-built chrome (the now-strip) may have rendered from a task event
       // that beat the async preload — re-render it now that TR is complete, or
       // a steady "กำลังทำ N งาน" would stay Thai until the next task change.
       try { renderRunning(); } catch {}
-      _obs.observe(document.body, { childList: true, subtree: true });
+      _obs.observe(document.body, { childList: true, characterData: true, subtree: true });
       setInterval(() => { if (!document.hidden) applyI18n(document.body); }, 1500);
     });
   }
@@ -1250,12 +1679,43 @@
   const ROLES = ["Researcher", "Engineer", "Designer", "Analyst", "Operator", "Specialist"];
   const NPCS = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12];
   // Live registry from the daemon (roster.sync) — identity source of truth.
-  let ROSTER = {}, REGROLES = [], REGSKILLS = {}, REGTOOLS = [], AUTOSKILLS = true, VERIFY = false;
+  let ROSTER = {}, REGROLES = [], REGROLEPROFILES = {}, REGSKILLS = {}, REGTOOLS = [], AUTOSKILLS = true, VERIFY = false;
   let BUILTIN_DESC = {}, REGMCP = {}, SOUND = true, HEARTBEAT = 0;
+  let DEFAULT_RUNTIME = "claude", RUNTIMES = ["claude", "codex", "hermes"];
   let FEATURES = { openai: false, gemini: false, stt: false, tts: false, live: false, image: false };
-  let TTSON = true, SOCIALMIN = 60, MAXSTAFF = 18, PROPOSALMIN = 120;
+  let TTSON = true, SOCIALMIN = 60, MAXSTAFF = 18, PROPOSALMIN = 120, UPDATECHECKS = false;
   let PROJECTS_CACHE = [];
   let _plistScroll = 0, _plistQ = "";  // preserve project-list scroll + search across live refreshes
+  function normRuntime(v) {
+    v = String(v || "").trim().toLowerCase();
+    return v === "codex" || v === "claude" || v === "hermes" ? v : "";
+  }
+  function runtimeName(v) {
+    const rt = normRuntime(v);
+    if (rt === "codex") return "Codex";
+    if (rt === "hermes") return "Hermes";
+    return "Claude Code";
+  }
+  function roleProfile(role) {
+    const p = REGROLEPROFILES && REGROLEPROFILES[String(role || "")];
+    return p && typeof p === "object" ? p : {};
+  }
+  function roleSeed(p) {
+    return String((p && (p.personaSeed || p.summary || p.prompt)) || "");
+  }
+  function effectiveRuntimeForAgent(id) {
+    const a = ROSTER[id] || {};
+    const ar = normRuntime(a.runtime);
+    if (ar) return { runtime: ar, source: "agent" };
+    const rr = normRuntime(roleProfile(a.role).runtime);
+    if (rr) return { runtime: rr, source: "role" };
+    return { runtime: normRuntime(DEFAULT_RUNTIME) || "claude", source: "default" };
+  }
+  function runtimeBadgeHtml(info) {
+    const r = normRuntime(info && info.runtime) || "claude";
+    const src = (info && info.source) || "default";
+    return `<span class="runtime ${r}" title="runtime: ${runtimeName(r)} · ${src}">⚙ ${runtimeName(r)}</span>`;
+  }
   const _opsScroll = {};  // OFFICE OPS per-tab scroll memory — survives action re-renders (pin/approve/reject/edit/delete) so the list doesn't jump to top
   function npcOf(id) {
     if (ROSTER[id] && ROSTER[id].avatar) return ROSTER[id].avatar;
@@ -1271,6 +1731,29 @@
   }
   function nameOf(id) {
     return (ROSTER[id] && ROSTER[id].name) || id[0].toUpperCase() + id.slice(1);
+  }
+  function staffIds() {
+    return Object.keys(ROSTER || {}).filter((id) => id !== "ceo" && id !== "main");
+  }
+  function mentionTokenFor(id) {
+    const nm = nameOf(id);
+    return nm && !/\s/.test(nm) ? nm : id;
+  }
+  function mentionRuntimeTag(id) {
+    const info = effectiveRuntimeForAgent(id);
+    const rt = normRuntime(info.runtime) || "claude";
+    if (rt !== "claude") return `${rt}(inherit)`;
+    const a = ROSTER[id] || {};
+    const provider = String(a.provider || "").trim();
+    const model = String(a.model || "").trim();
+    const detail = provider && provider !== "claude" ? provider : (model || "inherit");
+    return `claude(${detail})`;
+  }
+  function mentionDefaultToken() {
+    const ids = staffIds();
+    if (ids.length !== 1) return "";
+    const id = ids[0];
+    return id ? mentionTokenFor(id) : "";
   }
   // CSS sprite crops from the 256x512 sheet (cell 64): face (14,14,36,36)
   // keeps the face centered with chin + shoulders; standing body (16,6,32,54).
@@ -1305,6 +1788,12 @@
   const missions = {};
   const agents = {};   // id -> {state}
   let target = "ceo";   // open on the CEO seat (you) — orders flow to the Director
+  let railOrder = [];
+  let railDragId = "";
+
+  function isRosterAgent(id) {
+    return !!(ROSTER && ROSTER[id]);
+  }
 
   function ensureAgent(id, state) {
     // Guard: never resurrect a deleted agent. ROSTER keys are the source of
@@ -1320,26 +1809,51 @@
     }
   }
 
+  function syncRailOrder() {
+    const ids = Object.keys(ROSTER || {}).filter((id) => id !== "ceo" && id !== "main");
+    const known = new Set(ids);
+    railOrder = [...railOrder.filter((id) => known.has(id)), ...ids.filter((id) => !railOrder.includes(id))];
+  }
+
+  function moveRailAgent(from, to, after = false) {
+    if (!from || !to || from === to) return false;
+    if (from === "ceo" || from === "main" || to === "ceo" || to === "main") return false;
+    syncRailOrder();
+    const fromIx = railOrder.indexOf(from);
+    const toIx = railOrder.indexOf(to);
+    if (fromIx < 0 || toIx < 0) return false;
+    railOrder.splice(fromIx, 1);
+    let insertAt = railOrder.indexOf(to);
+    if (insertAt < 0) insertAt = railOrder.length;
+    if (after) insertAt += 1;
+    railOrder.splice(insertAt, 0, from);
+    api("/registry/agent/order", { ids: railOrder }).catch(() => {});
+    renderRail();
+    return true;
+  }
+
   const DOTS = { idle: "#4ade80", working: "#5ec8ff", blocked: "#ffb054", offline: "#6b7280", meeting: "#c084fc" };
   function renderRail() {
     railEl.innerHTML = "";
     // The CEO (you) always leads, then the Director, then the team in the order
-    // they were added (registry order — matches the rest of the UI).
-    const order = Object.keys(agents);
-    const ids = order.slice().sort((a, b) => {
-      const w = (x) => (x === "ceo" ? 0 : x === "main" ? 1 : 2);
-      return w(a) - w(b) || order.indexOf(a) - order.indexOf(b);
-    });
+    // saved in registry. CEO and Director stay pinned; staff can be reordered.
+    syncRailOrder();
+    const present = new Set(Object.keys(agents));
+    const fixed = ["ceo", "main"].filter((id) => present.has(id));
+    const ids = fixed.concat(railOrder.filter((id) => present.has(id)));
     for (const id of ids) {
       const seat = document.createElement("div");
       seat.className = "seat" + (id === target ? " active" : "")
         + (id === "ceo" ? " ceoSeat" : "") + (id === "main" ? " leadSeat" : "");
+      seat.dataset.id = id;
+      const canDrag = id !== "ceo" && id !== "main";
+      seat.draggable = canDrag;
       const f = document.createElement("div");
       f.className = "face";
       f.textContent = id[0].toUpperCase();
       face(f, id, 36);
       const nm = document.createElement("div");
-      nm.className = "nm"; nm.textContent = id === "ceo" ? nameOf(id) + " 〔คุณ〕" : nameOf(id);
+      nm.className = "nm"; nm.textContent = id === "ceo" ? nameOf(id) + " 〔" + tr("คุณ") + "〕" : nameOf(id);
       const dot = document.createElement("div");
       dot.className = "dot";
       dot.style.background = DOTS[agents[id].state] || "#4ade80";
@@ -1356,11 +1870,39 @@
       const ed = document.createElement("div");
       ed.className = "editbtn";
       ed.textContent = "✏";
-      ed.title = "แก้ไข " + nameOf(id);
+      ed.title = tr("แก้ไข") + " " + nameOf(id);
       ed.onclick = (e) => { e.stopPropagation(); openEditor(id); };
       seat.appendChild(ed);
+      seat.addEventListener("dragstart", (e) => {
+        if (!canDrag) return;
+        railDragId = id;
+        seat.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", id);
+      });
+      seat.addEventListener("dragend", () => {
+        railDragId = "";
+        railEl.querySelectorAll(".dragging,.dropBefore,.dropAfter").forEach((el) =>
+          el.classList.remove("dragging", "dropBefore", "dropAfter"));
+      });
+      seat.addEventListener("dragover", (e) => {
+        if (!canDrag || !railDragId || railDragId === id) return;
+        e.preventDefault();
+        const after = e.clientX > seat.getBoundingClientRect().left + seat.offsetWidth / 2;
+        seat.classList.toggle("dropBefore", !after);
+        seat.classList.toggle("dropAfter", after);
+      });
+      seat.addEventListener("dragleave", () => seat.classList.remove("dropBefore", "dropAfter"));
+      seat.addEventListener("drop", (e) => {
+        if (!canDrag) return;
+        e.preventDefault();
+        const from = e.dataTransfer.getData("text/plain") || railDragId;
+        const after = e.clientX > seat.getBoundingClientRect().left + seat.offsetWidth / 2;
+        seat.classList.remove("dropBefore", "dropAfter");
+        moveRailAgent(from, id, after);
+      });
       seat.title = id === "ceo"
-        ? `${nameOf(id)} — นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง`
+        ? `${nameOf(id)} — ${tr("นี่คือคุณเอง สั่งงานที่นี่แล้ว Director จะมารับคำสั่ง")}`
         : `${nameOf(id)} — ${roleOf(id)} (double-click: ID card)`;
       railEl.appendChild(seat);
     }
@@ -1388,7 +1930,9 @@
   _miniMQ.addEventListener("change", () => setComposerHint());
 
   function setTarget(id) {
+    if (groupView) LAST_GROUP_VIEW[target] = { ...groupViewMeta };
     groupView = null;  // leaving a meeting log view
+    groupViewMeta = { key: null, title: "", bucket: "@group", faceId: null };
     if (typeof hideSpeakBar === "function") hideSpeakBar();
     target = id;
     document.getElementById("compName").textContent = nameOf(id);
@@ -1399,7 +1943,9 @@
     // The realtime call always reaches the main agent — offer it from the CEO seat too.
     document.getElementById("liveBtn").style.display = (id === "main" || id === "ceo") ? "" : "none";
     renderRail();
-    refreshThreadBar(true);  // clicking a seat always shows that agent's latest thread
+    const last = LAST_GROUP_VIEW[target];
+    if (last && last.key) openGroupLog(last.key, last.title || last.key, last.bucket || "@group", last.faceId ?? null);
+    else refreshThreadBar(true);  // clicking a seat always shows that agent's latest thread
   }
 
   // ---- chat ---------------------------------------------------------------
@@ -1420,10 +1966,25 @@
       const f = document.createElement("div");
       f.className = "face";
       face(f, who, 20);
-      w.append(f, document.createTextNode(who.toUpperCase()));
+      w.append(f, document.createTextNode(nameOf(String(who).split("#")[0])));
       d.appendChild(w);
     }
-    d.appendChild(document.createTextNode(text));
+    const body = document.createElement("div");
+    body.className = "msgtext";
+    body.textContent = text;
+    d.appendChild(body);
+    const shouldFold = String(text || "").length > 900 || String(text || "").split("\n").length > 12;
+    if (shouldFold) {
+      body.classList.add("collapsed");
+      const btn = document.createElement("button");
+      btn.className = "moretext";
+      btn.textContent = "展开全文";
+      btn.onclick = () => {
+        const collapsed = body.classList.toggle("collapsed");
+        btn.textContent = collapsed ? "展开全文" : "收起";
+      };
+      d.appendChild(btn);
+    }
     if (String(cls).includes("agent")) attachMediaPreviews(d, text);
     const tm = document.createElement("div");
     tm.className = "msgtime";
@@ -1439,6 +2000,22 @@
     d.className = "chip"; d.innerHTML = html;
     log.appendChild(d);
     log.scrollTop = log.scrollHeight;
+  }
+  function addMeetingTrace(m) {
+    const key = m.meeting;
+    if (!key) return addMsg("agent summary", "main", m.text, m.ts, "· meeting");
+    const title = m.meetingTitle || String(m.text || "").split("\n")[0].replace(/^📝\s*Meeting summary:\s*/i, "") || key;
+    const d = addMsg("agent summary", "main", m.text, m.ts, "· meeting");
+    const row = document.createElement("div");
+    row.className = "btnrow";
+    row.style.margin = "8px 0 0";
+    const btn = document.createElement("button");
+    btn.className = "send";
+    btn.textContent = "🗣 查看完整会议记录";
+    btn.onclick = () => openGroupLog(key, title, "@group");
+    row.appendChild(btn);
+    d.appendChild(row);
+    return d;
   }
   // "agent is typing" status bubble — optional icon + a live label saying what the
   // agent is doing right now (thinking / reading a file / waiting for approval…),
@@ -1706,10 +2283,10 @@
           sel.appendChild(o);
         }
       };
-      fill(inSel, "audioinput", audioInId(), "ไมโครโฟน");
-      fill(outSel, "audiooutput", audioOutId(), "ลำโพง");
+      fill(inSel, "audioinput", audioInId(), tr("ไมโครโฟน"));
+      fill(outSel, "audiooutput", audioOutId(), tr("ลำโพง"));
     } catch {
-      if (note) note.textContent = "อ่านรายชื่ออุปกรณ์เสียงไม่ได้ — ลองอนุญาตไมโครโฟนก่อน";
+      if (note) note.textContent = tr("อ่านรายชื่ออุปกรณ์เสียงไม่ได้ — ลองอนุญาตไมโครโฟนก่อน");
     }
     inSel.onchange = () => { try { localStorage.setItem("audioIn", inSel.value); } catch {} };
     if (sinkOK) {
@@ -1719,7 +2296,7 @@
       };
     } else {
       outSel.disabled = true;
-      if (note) note.textContent = "ℹ️ ระบบนี้ยังไม่รองรับการเลือกลำโพงในแอป — เสียงจะออกอุปกรณ์เริ่มต้น (เปลี่ยนได้ที่การตั้งค่าเสียงของ Windows/macOS)";
+      if (note) note.textContent = tr("ℹ️ ระบบนี้ยังไม่รองรับการเลือกลำโพงในแอป — เสียงจะออกอุปกรณ์เริ่มต้น (เปลี่ยนได้ที่การตั้งค่าเสียงของ Windows/macOS)");
     }
   }
 
@@ -1740,7 +2317,7 @@
     src.connect(proc);
     proc.connect(ctx.destination);
     _rec = rec;
-    _recTimeout = setTimeout(() => voiceAbort("⏱ เกิน 60 วินาที — ตัดจบอัตโนมัติ"), 60000);
+    _recTimeout = setTimeout(() => voiceAbort(tr("⏱ เกิน 60 วินาที — ตัดจบอัตโนมัติ")), 60000);
   }
 
   function recStop() {
@@ -1802,7 +2379,7 @@
     if (lb) lb.classList.toggle("nokey", !FEATURES.live);
   }
   function voiceGateFail() {
-    pillShow("✗ ฟีเจอร์เสียงต้องมี Main API key (OpenAI หรือ Gemini)", "เปิดหน้าตั้งค่าให้แล้ว", false);
+    pillShow(tr("✗ ฟีเจอร์เสียงต้องมี Main API key (OpenAI หรือ Gemini)"), tr("เปิดหน้าตั้งค่าให้แล้ว"), false);
     setTimeout(pillHide, 3600);
     openSettings("connect");
   }
@@ -1811,17 +2388,17 @@
     if (!FEATURES.stt) { voiceGateFail(); return false; }
     if (_rec || _voiceBusy) return false;
     try { await recStart(); } catch (e) {
-      pillShow("✗ ไมโครโฟนไม่พร้อม — กดอนุญาตไมค์ให้แอปก่อน", "", false);
+      pillShow(tr("✗ ไมโครโฟนไม่พร้อม — กดอนุญาตไมค์ให้แอปก่อน"), "", false);
       setTimeout(pillHide, 3500);
       return false;
     }
-    pillShow("กำลังฟัง… พูดได้เลย", hint, true);
+    pillShow(tr("กำลังฟัง… พูดได้เลย"), hint, true);
     return true;
   }
   async function voiceFinish() {
     const blob = recStop();
     if (!blob) { pillHide(); return null; }
-    pillShow("⏳ กำลังถอดเสียง…", "", false);
+    pillShow(tr("⏳ กำลังถอดเสียง…"), "", false);
     _voiceBusy = true;
     try {
       const r = await fetch("/voice/transcribe", { method: "POST",
@@ -1844,13 +2421,13 @@
   let LIVE = null;
   async function liveStart() {
     if (!FEATURES.live) {
-      addChip("📞 Realtime ต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT");
+      addChip(tr("📞 Realtime ต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT"));
       return openSettings("connect");
     }
     const btn = document.getElementById("liveBtn");
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraint({ channelCount: 1 }) }); }
-    catch { return addChip("📞 เปิดไมค์ไม่ได้ — กดอนุญาตไมค์ก่อน"); }
+    catch { return addChip(tr("📞 เปิดไมค์ไม่ได้ — กดอนุญาตไมค์ก่อน")); }
     // calls always go to the main agent (it uses its own voice, or a default preset)
     const ws = new WebSocket(`ws://127.0.0.1:8787/live?agent=main`);
     const ctxIn = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -1858,11 +2435,11 @@
     let playAt = 0;
     LIVE = { ws, stream, ctxIn, playCtx };
     btn.classList.add("rec");
-    pillShow("📞 กำลังเชื่อมต่อสายสด…", "กด 📞 อีกครั้งเพื่อวางสาย", false);
+    pillShow(tr("📞 กำลังเชื่อมต่อสายสด…"), tr("กด 📞 อีกครั้งเพื่อวางสาย"), false);
 
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === "live-ready") pillShow("📞 สายต่อแล้ว — พูดได้เลย", "กด 📞 เพื่อวางสาย", true);
+      if (m.type === "live-ready") pillShow(tr("📞 สายต่อแล้ว — พูดได้เลย"), tr("กด 📞 เพื่อวางสาย"), true);
       else if (m.type === "error") { addChip("📞 " + m.text); liveStop(); }
       else if (m.type === "audio") {
         // 24k PCM16 → schedule back-to-back for smooth playback.
@@ -1950,7 +2527,7 @@
   // lands in the button's input box for you to review and send yourself.
   function wireMic(btn, input) {
     if (!btn) return;
-    btn.title = "🎤 คลิกเพื่อพูด — คลิกอีกครั้งเพื่อหยุด (ข้อความลงช่องพิมพ์)";
+    btn.title = tr("🎤 คลิกเพื่อพูด — คลิกอีกครั้งเพื่อหยุด (ข้อความลงช่องพิมพ์)");
     btn.onclick = async (e) => {
       e.preventDefault();
       if (btn.classList.contains("rec")) {
@@ -1966,7 +2543,7 @@
             input.focus();
           }
         }
-      } else if (await voiceBegin("คลิก 🎤 อีกครั้งเพื่อหยุด")) {
+      } else if (await voiceBegin(tr("คลิก 🎤 อีกครั้งเพื่อหยุด"))) {
         btn.classList.add("rec");
       }
     };
@@ -1980,7 +2557,7 @@
   async function _pttSend() {
     const val = await voiceFinish();
     if (!val) return;
-    pillShow("🎤 " + val.slice(0, 90), "ส่งแล้ว ✓", false);
+    pillShow("🎤 " + val.slice(0, 90), tr("ส่งแล้ว ✓"), false);
     setTimeout(pillHide, 2400);
     // A spoken command is a REAL chat message: in normal mode the pane jumps to
     // the CEO seat and the words land as your bubble (with a voice badge); feed
@@ -1998,10 +2575,10 @@
     refreshThreadBar();
   }
   // Click the mic button = toggle (press to start, press to send).
-  window.pttToggle = () => { if (_rec) _pttSend(); else voiceBegin("กดอีกครั้ง / ปล่อยปุ่มเพื่อส่ง"); };
+  window.pttToggle = () => { if (_rec) _pttSend(); else voiceBegin(tr("กดอีกครั้ง / ปล่อยปุ่มเพื่อส่ง")); };
   // Hold-to-talk from the global hotkey: key DOWN starts, key UP sends.
   window.pttSet = (on) => {
-    if (on) { if (!_rec) voiceBegin("ปล่อยปุ่มเพื่อส่ง"); }
+    if (on) { if (!_rec) voiceBegin(tr("ปล่อยปุ่มเพื่อส่ง")); }
     else if (_rec) _pttSend();
   };
   // Tell the shell which chord to listen for (persisted per machine).
@@ -2068,13 +2645,13 @@
     return d;
   }
   function clearFeed() {
-    feedEl.innerHTML = `<div id="feedEmpty">— เงียบสงบ… รอความเคลื่อนไหวในออฟฟิศ —</div>`;
+    feedEl.innerHTML = `<div id="feedEmpty">${tr("— เงียบสงบ… รอความเคลื่อนไหวในออฟฟิศ —")}</div>`;
   }
   document.getElementById("feedClear").onclick = clearFeed;
   // Permission requests become ACTIONABLE cards right in the stream — the
   // same broker answers, no mode-switch needed to unblock an agent.
   function addFeedPerm(ev) {
-    const d = addFeed(ev.agent, "🛡 ขอใช้ " + ev.tool, ev.session || "", "alert");
+    const d = addFeed(ev.agent, tr("🛡 ขอใช้") + " " + ev.tool, ev.session || "", "alert");
     d.id = "fperm-" + ev.perm;
     let inp = "";
     try { inp = JSON.stringify(JSON.parse(ev.input)); } catch { inp = String(ev.input || ""); }
@@ -2086,9 +2663,9 @@
     }
     const row = document.createElement("div");
     row.className = "fpbtns";
-    row.innerHTML = `<button class="ok">✓ อนุญาต</button>` +
-      `<button class="ok" title="อนุญาต ${ev.tool} ให้ agent นี้ตลอดไป">✓✓ ตลอดไป</button>` +
-      `<button class="no">✗ ไม่</button>`;
+    row.innerHTML = `<button class="ok">✓ ${tr("อนุญาต")}</button>` +
+      `<button class="ok" title="${tr("อนุญาต")} ${ev.tool} ${tr("ตลอดไป")}">✓✓ ${tr("ตลอดไป")}</button>` +
+      `<button class="no">✗ ${tr("ไม่")}</button>`;
     const bt = row.querySelectorAll("button");
     bt[0].onclick = () => respondPerm(ev.perm, "allow");
     bt[1].onclick = () => respondPerm(ev.perm, "allow", true);
@@ -2229,28 +2806,34 @@
   }
   // One mirror for everything worth glancing at while streaming/debugging.
   function feedRoute(ev) {
-    if (ev.replay || ev.theater) return;
-    const sess = ev.session || "";
-    if (ev.type === "chat.message") addFeed(ev.sub || ev.agent, ev.text, sess, ev.sub ? "ghostly" : "");
+    if (!ACTIVITY_FILTER.showFeed(ev)) return;
+    const sess = "";
+    if (ev.type === "task.started") {
+      const title = taskTitleVisible(ev.title) || tr("กำลังทำงาน…");
+      addFeed(ev.agent, "▶ " + title, sess);
+    }
     else if (ev.type === "task.progress") addFeed(ev.agent, "⚙ " + (ev.tool || "…"), sess);
     else if (ev.type === "subagent.progress") addFeed(ev.sub, "⚙ " + (ev.tool || "…"), sess, "ghostly");
-    else if (ev.type === "subagent.spawned") addFeed(ev.sub, "👻 แตกร่างรับงาน: " + String(ev.text || "").slice(0, 80), sess, "ghostly");
-    else if (ev.type === "subagent.done") addFeed(ev.sub, ev.ok ? "✓ งานเสร็จ กลับเข้าร่าง" : "✗ ล้มเหลว", sess, "ghostly");
+    else if (ev.type === "subagent.spawned") addFeed(ev.sub, tr("👻 แตกร่างรับงาน:") + " " + String(ev.text || "").slice(0, 80), sess, "ghostly");
+    else if (ev.type === "subagent.done") addFeed(ev.sub, ev.ok ? tr("✓ งานเสร็จ กลับเข้าร่าง") : tr("✗ ล้มเหลว"), sess, "ghostly");
     else if (ev.type === "perm.requested") addFeedPerm(ev);
     else if (ev.type === "perm.approved") {
-      if (!resolveFeedPerm(ev.perm, ev.via === "rule" ? "✓ อนุญาตอัตโนมัติ (ตามสิทธิ์ที่ให้ไว้)" : "✓ อนุญาตแล้ว", true))
-        addFeed(ev.agent, "🛡 " + ev.tool + " — allowed ✓", sess);
+      if (!resolveFeedPerm(ev.perm, ev.via === "rule" ? tr("✓ อนุญาตอัตโนมัติ (ตามสิทธิ์ที่ให้ไว้)") : tr("✓ อนุญาตแล้ว"), true))
+        addFeed(ev.agent, "🛡 " + ev.tool + " — " + tr("อนุญาต") + " ✓", sess);
     } else if (ev.type === "perm.denied") {
-      if (!resolveFeedPerm(ev.perm, ev.via === "timeout" ? "✗ หมดเวลา — ปฏิเสธอัตโนมัติ" : "✗ ไม่อนุญาต", false))
-        addFeed(ev.agent, "🛡 " + ev.tool + " — denied ✗", sess);
+      if (!resolveFeedPerm(ev.perm, ev.via === "timeout" ? tr("✗ หมดเวลา — ปฏิเสธอัตโนมัติ") : tr("✗ ไม่อนุญาต"), false))
+        addFeed(ev.agent, "🛡 " + ev.tool + " — " + tr("ปฏิเสธ") + " ✗", sess);
     }
-    else if (ev.type === "task.completed") addFeed(ev.agent, "✓ งานเสร็จ", sess);
-    else if (ev.type === "task.failed") addFeed(ev.agent, "✗ งานล้มเหลว", sess);
-    else if (ev.type === "task.delegated") addFeed("main", "📋 มอบหมายงานให้ " + nameOf(ev.target), sess);
-    else if (ev.type === "ceo.summon") addFeed("main", "👑 เข้ารับคำสั่งจาก CEO", sess);
-    else if (ev.type === "ceo.report") addFeed("main", "📨 ส่งสรุปงานให้ CEO", sess);
-    else if (ev.type === "collab.started") addFeed((ev.agents || ["main"])[0], "🤝 ประชุมเริ่ม: " + String(ev.text || ""), sess);
-    else if (ev.type === "skill.created") addFeed(ev.agent, "📚 เรียนรู้สกิลใหม่: " + ev.skill, sess);
+    else if (ev.type === "task.completed") addFeed(ev.agent, tr("✓ งานเสร็จ"), sess);
+    else if (ev.type === "task.failed") {
+      const reason = friendlyFailureReason(ev.reason, ev.runtime);
+      addFeed(ev.agent, reason ? "✗ " + reason : tr("✗ งานล้มเหลว"), sess);
+    }
+    else if (ev.type === "task.delegated") addFeed("main", tr("📋 มอบหมายงานให้") + " " + nameOf(ev.target), sess);
+    else if (ev.type === "ceo.summon") addFeed("main", tr("👑 เข้ารับคำสั่งจาก CEO"), sess);
+    else if (ev.type === "ceo.report") addFeed("main", tr("📨 ส่งสรุปงานให้ CEO"), sess);
+    else if (ev.type === "collab.started") addFeed((ev.agents || ["main"])[0], tr("🤝 ประชุมเริ่ม:") + " " + String(ev.text || ""), sess);
+    else if (ev.type === "skill.created") addFeed(ev.agent, tr("📚 เรียนรู้สกิลใหม่:") + " " + ev.skill, sess);
     // Plugins changed anywhere (this window, another, the Hub, an agent) → keep the open
     // Plugins panel in sync so it never shows a stale installed/removed state.
     else if (ev.type === "plugins.changed") {
@@ -2267,7 +2850,7 @@
     else if (ev.type === "proposal.approved") markProposalResolved(ev.proposal, true);
     else if (ev.type === "proposal.rejected") markProposalResolved(ev.proposal, false);
     else if (ev.type === "memory.learned")
-      addFeed(ev.agent, "🧠 จดความจำใหม่ " + ev.count + " ข้อ", "");
+      addFeed(ev.agent, tr("🧠 จดความจำใหม่") + " " + ev.count + " " + tr("ข้อ"), "");
     else if (ev.type === "plugin.intent" && ev.repo) {
       // A bagidea:// "install" deep link reached the office. Open the Plugins Hub
       // window pre-loaded with this repo for a CONFIRM-then-install — never silent.
@@ -2346,11 +2929,11 @@
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, decision, always }),
     });
-    if (r.ok && always) addChip("🛡 จำสิทธิ์แล้ว — เครื่องมือนี้จะไม่ถามซ้ำสำหรับ agent นี้");
+    if (r.ok && always) addChip(tr("🛡 จำสิทธิ์แล้ว — เครื่องมือนี้จะไม่ถามซ้ำสำหรับ agent นี้"));
     if (!r.ok) {
       // Stale card (daemon restarted / request already timed out) — clean up.
       removePermCard(id);
-      addChip("🛡 การ์ดนี้หมดอายุไปแล้ว (คำขอถูกปิดไปก่อนหน้า)");
+      addChip(tr("🛡 การ์ดนี้หมดอายุไปแล้ว (คำขอถูกปิดไปก่อนหน้า)"));
     }
   }
   function removePermCard(id) {
@@ -2534,7 +3117,67 @@
     };
   }
 
+  function buildChipPicker(box, items, sel) {
+    if (!box) return;
+    box.style.position = "relative";
+    box.innerHTML = "";
+    const byVal = new Map(items.map((it) => [it.val, it]));
+    const chips = document.createElement("div");
+    chips.className = "checks";
+    const menu = document.createElement("div");
+    menu.className = "cbmenu";
+    const search = document.createElement("input");
+    search.placeholder = "🔍 " + tr("ค้นหา");
+    search.style.cssText = "width:100%;margin:0;border:0;border-bottom:1px solid var(--line);border-radius:9px 9px 0 0;padding:8px 12px;font-size:12px;background:#0e1626;color:var(--text)";
+    const opts = document.createElement("div");
+    menu.append(search, opts);
+    box.append(chips, menu);
+    const addBtn = document.createElement("div");
+    addBtn.className = "chk"; addBtn.style.cssText = "border-style:dashed;cursor:pointer";
+    addBtn.textContent = "＋ " + tr("เพิ่ม");
+    function renderChips() {
+      chips.innerHTML = "";
+      const picked = items.filter((it) => sel.has(it.val));
+      for (const v of sel) if (!byVal.has(v)) picked.push({ val: v, label: v, tip: "" });
+      if (!picked.length) {
+        const e = document.createElement("span");
+        e.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
+        e.textContent = tr("ยังไม่ได้เลือก");
+        chips.appendChild(e);
+      }
+      for (const it of picked) {
+        const c = document.createElement("div");
+        c.className = "chk on"; c.title = it.tip || ""; c.style.cursor = "pointer";
+        c.innerHTML = `${esc(it.label)} <b style="opacity:.6;margin-left:2px">✕</b>`;
+        c.onclick = () => { sel.delete(it.val); renderChips(); if (menu.classList.contains("open")) renderOpts(); };
+        chips.appendChild(c);
+      }
+      chips.appendChild(addBtn);
+    }
+    function renderOpts() {
+      const f = search.value.trim().toLowerCase();
+      const avail = items.filter((it) => !sel.has(it.val) &&
+        (!f || (it.label + " " + (it.tip || "")).toLowerCase().includes(f)));
+      opts.innerHTML = avail.length ? "" : `<div class="cbopt" style="opacity:.55;cursor:default">${tr("ไม่พบ")}</div>`;
+      for (const it of avail) {
+        const o = document.createElement("div");
+        o.className = "cbopt"; o.title = it.tip || ""; o.textContent = it.label;
+        o.onmousedown = (e) => { e.preventDefault(); sel.add(it.val); renderChips(); renderOpts(); search.focus(); };
+        opts.appendChild(o);
+      }
+    }
+    addBtn.onclick = () => {
+      const open = !menu.classList.contains("open");
+      menu.classList.toggle("open", open);
+      if (open) { search.value = ""; renderOpts(); setTimeout(() => search.focus(), 0); }
+    };
+    search.oninput = renderOpts;
+    search.onblur = () => setTimeout(() => menu.classList.remove("open"), 160);
+    renderChips();
+  }
+
   // 🔗 CONNECT: API key vault + external channel connectors.
+  const threadGroupsOpen = new Set();
   async function renderConnectTab() {
     const regAll = await fetch("/registry").then((x) => x.json()).catch(() => ({}));
     const chStatus = await fetch("/channels/status").then((x) => x.json()).catch(() => ({}));
@@ -2620,6 +3263,13 @@
       const mainKeys = regAll.apiKeys || {};
       const subhead = (txt) => { const d = document.createElement("div");
         d.style.cssText = "font-size:10px;color:var(--dim);font-weight:600;margin:9px 0 2px;opacity:.85"; d.textContent = txt; provbox.appendChild(d); };
+      const wslConfigRow = ({ checkboxId = "", checkboxClass = "", distroId = "", distroClass = "", checked = false, distro = "", saveId = "", saveClass = "", runtime = "CLI" }) => `
+        <div class="wslcfg">
+          <label><input ${checkboxId ? `id="${checkboxId}"` : ""} ${checkboxClass ? `class="${checkboxClass}"` : ""} type="checkbox" ${checked ? "checked" : ""}>
+            <span>WSL bridge<small>${runtime} 从 WSL shell 启动，读取 WSL 内的 PATH/login/config。</small></span></label>
+          <input ${distroId ? `id="${distroId}"` : ""} ${distroClass ? `class="${distroClass}"` : ""} type="text" placeholder="Distro，可留空" value="${esc(distro || "")}">
+          <div class="winbtn ${saveClass || ""}" ${saveId ? `id="${saveId}"` : ""} title="保存 WSL bridge 设置">💾</div>
+        </div>`;
 
       // Generic provider card: status + masked key + Connect / retest / change / remove.
       const providerCard = (id, label, where, viaProxy, removable, local) => {
@@ -2647,7 +3297,7 @@
         const stat = card.querySelector(".pstat");
         const connect = async (key) => {
           if (key) await api("/registry/provider", { provider: id, token: key });
-          stat.textContent = "🧪 กำลังเชื่อมต่อ…";
+          stat.textContent = tr("🧪 กำลังเชื่อมต่อ…");
           const r = await api("/registry/provider/test", { provider: id });
           if (r.ok) renderConnectTab();
           else stat.innerHTML = `<span style="color:#ff6258">❌ ${r.msg || "เชื่อมต่อไม่สำเร็จ"}</span>`;
@@ -2691,8 +3341,13 @@
             <input type="password" placeholder="หรือวาง API key…" autocomplete="new-password" style="flex:0 0 120px;margin:0">
             <div class="winbtn" data-a="savekey" title="ใช้ API key">💾</div>`;
         }
+        const cdetail = cauth.version
+          ? ` · ${cauth.version}${cauth.useWsl ? " · WSL" + (cauth.distro ? " " + cauth.distro : "") : ""}`
+          : (cauth.useWsl ? " · WSL" + (cauth.distro ? " " + cauth.distro : "") : "");
         cc.innerHTML = `<div class="meta"><b>${cauth.connected ? "✅" : "⚪"} Claude · Anthropic</b>
-            <span class="pstat" style="color:${cauth.connected ? "#4ade80" : "var(--dim)"}">${statusText}</span></div>` + controls;
+            <span class="pstat" style="color:${cauth.connected ? "#4ade80" : "var(--dim)"}">${statusText}${esc(cdetail)}</span></div>` + controls + `
+          ${wslConfigRow({ checkboxId: "claudeUseWsl", distroId: "claudeDistro", saveId: "claudeCfgSave",
+            checked: !!regAll.claudeUseWsl, distro: regAll.claudeWslDistro || "", runtime: "Claude Code" })}`;
         const saveKey = (v) => { if (v) api("/registry/key", { name: "ANTHROPIC_API_KEY", value: v }).then(() => renderConnectTab()); };
         const revealKeyInput = () => {
           const meta = cc.querySelector(".meta"); cc.innerHTML = ""; cc.appendChild(meta);
@@ -2713,8 +3368,43 @@
           else if (act === "rmkey") btn.onclick = () =>
             api("/registry/key", { name: "ANTHROPIC_API_KEY", remove: true }).then(() => renderConnectTab());
         });
+        cc.querySelector("#claudeCfgSave").onclick = async () => {
+          await api("/claude/config", {
+            useWsl: cc.querySelector("#claudeUseWsl").checked,
+            distro: cc.querySelector("#claudeDistro").value.trim(),
+          });
+          renderConnectTab();
+        };
         provbox.appendChild(cc);
       }
+
+      subhead("Runtime CLIs");
+      const runtimeCliCard = async (id, label) => {
+        const info = await fetch(`/${id}/status`).then((x) => x.json()).catch((e) => ({ connected: false, error: String(e) }));
+        const cc = document.createElement("div");
+        cc.className = "arow"; cc.style.cursor = "default";
+        const ok = !!info.connected;
+        const detail = ok
+          ? `${info.version || id}${info.useWsl ? " · WSL" + (info.distro ? " " + info.distro : "") : ""}`
+          : (info.error || `${id} command not found`);
+        cc.innerHTML = `<div class="meta"><b>${ok ? "✅" : "⚪"} ${label} runtime</b>
+            <span class="pstat" style="color:${ok ? "#4ade80" : "var(--dim)"}">${esc(detail)}</span>
+            <span style="font-size:10.5px;color:var(--dim)">ใช้ config/login ของ ${label} เอง · ตั้งต่อ agent ในหน้า AGENTS หรือ template ใน ROLES</span></div>
+          ${wslConfigRow({ checkboxClass: "cliUseWsl", distroClass: "cliDistro", saveClass: "cliCfgSave",
+            checked: !!regAll[id + "UseWsl"], distro: regAll[id + "WslDistro"] || "", runtime: label })}
+          <div class="winbtn" data-a="retest" title="ทดสอบใหม่">🧪</div>`;
+        cc.querySelector('[data-a="retest"]').onclick = () => renderConnectTab();
+        cc.querySelector(".cliCfgSave").onclick = async () => {
+          await api(`/${id}/config`, {
+            useWsl: cc.querySelector(".cliUseWsl").checked,
+            distro: cc.querySelector(".cliDistro").value.trim(),
+          });
+          renderConnectTab();
+        };
+        provbox.appendChild(cc);
+      };
+      await runtimeCliCard("codex", "Codex");
+      await runtimeCliCard("hermes", "Hermes");
 
       // ── Anthropic-compatible (claude talks straight to them)
       subhead("ต่อตรง (Anthropic-compatible)");
@@ -2835,6 +3525,8 @@
           <div class="knob"></div> 🗣 Agent voices — เสียงพูดของ agents (ต้องมี Gemini key)</div>
         <div class="switch" id="startupSw" style="margin-top:6px">
           <div class="knob"></div> 🚀 Start at login — เปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ</div>
+        <div class="switch ${UPDATECHECKS ? "on" : ""}" id="updSw" style="margin-top:6px">
+          <div class="knob"></div> 🔄 Update checks — แจ้งเตือนเมื่อมีเวอร์ชันใหม่</div>
         <div class="field" style="margin-top:8px"><label>💓 DIRECTOR HEARTBEAT — รอบตรวจภาพรวม/ตารางงาน (แจ้งเฉพาะที่ควรรู้)</label>
           <select id="hbSel">
             <option value="0">ปิด</option>
@@ -2925,7 +3617,10 @@
           ส่วนวงประชุม 🗣 ไม่สร้าง thread · ลบ thread = agent ลืมเรื่องนั้น</div>
         <div id="thlist">loading…</div>`;
     } else {
-      bodyHtml = `<div id="rlist"></div>
+      bodyHtml = `<div class="field"><label>⚙ DEFAULT RUNTIME — role/agent ไม่ได้ตั้งไว้จะใช้ตัวนี้</label>
+          <select id="defaultRuntimeSel">${RUNTIMES.map((r) =>
+            `<option value="${r}">${runtimeName(r)}</option>`).join("")}</select></div>
+        <div id="rlist"></div>
         <div class="assistrow" style="margin-top:8px">
           <input id="newRole" placeholder="New job title…">
           <button class="sparkle" id="addRole">＋ Add</button>
@@ -2951,10 +3646,12 @@
         // The CEO is the user's stand-in, not an AI agent — no model to show.
         let _brainHtml = "";
         if (id !== "ceo") {
+          const _rtInfo = effectiveRuntimeForAgent(id);
           const _prov = a.provider || "claude";
           const _brain = a.model ? a.model : (_prov === "claude" ? "Claude" : _prov);
           const _brainTitle = `${_prov}${a.model ? " / " + a.model : ""}`;
-          _brainHtml = `<span class="brain" title="${_brainTitle}">🧠 ${_brain}</span>`;
+          _brainHtml = (_rtInfo.runtime === "claude" ? `<span class="brain" title="${_brainTitle}">🧠 ${_brain}</span>` : "") +
+            runtimeBadgeHtml(_rtInfo);
         }
         row.insertAdjacentHTML("beforeend",
           `<div class="meta"><b>${a.name}</b><span>${a.role} · ${id}` +
@@ -2970,10 +3667,10 @@
       if (scEl) scEl.textContent = `${nStaff} / ${MAXSTAFF} agents`;
       const hireBtn = modalCard.querySelector("#newAgent");
       hireBtn.onclick = () => {
-        if (nStaff >= MAXSTAFF) return addChip(`ออฟฟิศเต็มแล้ว — สูงสุด ${MAXSTAFF} คน (ใช้การแตกร่างผีสำหรับงานขนาน)`);
+        if (nStaff >= MAXSTAFF) return addChip(`${tr("ออฟฟิศเต็มแล้ว — สูงสุด")} ${MAXSTAFF} ${tr("คน (ใช้การแตกร่างผีสำหรับงานขนาน)")}`);
         openEditor(null);
       };
-      if (nStaff >= MAXSTAFF) { hireBtn.classList.add("nokey"); hireBtn.textContent = `ออฟฟิศเต็ม (${nStaff}/${MAXSTAFF})`; }
+      if (nStaff >= MAXSTAFF) { hireBtn.classList.add("nokey"); hireBtn.textContent = `${tr("ออฟฟิศเต็ม")} (${nStaff}/${MAXSTAFF})`; }
       // 🪟 Start with Windows — reflects the live HKCU Run key (tray-synced).
       const startupSw = modalCard.querySelector("#startupSw");
       if (startupSw) {
@@ -2983,10 +3680,16 @@
           try {
             const r = await api("/startup", { on });
             e.currentTarget.classList.toggle("on", !!r.on);
-            addChip(on ? "🚀 จะเปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ" : "ปิดการเปิดอัตโนมัติแล้ว");
-          } catch { addChip("✗ ตั้งค่าไม่สำเร็จ"); }
+            addChip(on ? tr("🚀 จะเปิดออฟฟิศอัตโนมัติเมื่อเข้าสู่ระบบ") : tr("ปิดการเปิดอัตโนมัติแล้ว"));
+          } catch { addChip(tr("✗ ตั้งค่าไม่สำเร็จ")); }
         };
       }
+      modalCard.querySelector("#updSw").onclick = async (e) => {
+        UPDATECHECKS = !UPDATECHECKS;
+        await api("/registry/updatechecks", { enabled: UPDATECHECKS });
+        e.currentTarget.classList.toggle("on", UPDATECHECKS);
+        document.getElementById("updBar").classList.remove("on");
+      };
       modalCard.querySelector("#sndSw").onclick = async (e) => {
         SOUND = !SOUND;
         await api("/registry/sound", { enabled: SOUND });
@@ -3106,19 +3809,29 @@
         for (const [aid, list] of entries) {
           const isGroup = aid === "@group";
           const isSub = aid === "@sub";
+          const groupKey = "threads:" + aid;
+          const open = threadGroupsOpen.has(groupKey);
           const head = document.createElement("div");
-          head.className = "arow";
-          head.style.cursor = "default";
+          head.className = "arow threadGroupHead";
+          head.style.cursor = "pointer";
           if (!isGroup && !isSub) {
             const f = document.createElement("div");
             f.className = "face"; face(f, aid, 34);
             head.appendChild(f);
           }
           head.insertAdjacentHTML("beforeend",
-            `<div class="meta"><b>${isGroup ? "🗣 การประชุม (group sessions)"
+            `<div class="meta"><b><span style="display:inline-block;width:14px">${open ? "▾" : "▸"}</span>${isGroup ? "🗣 การประชุม (group sessions)"
               : isSub ? "👻 Sub-agents (ร่างแยก)" : nameOf(aid)}</b>` +
             `<span>${list.length} ${(isGroup || isSub) ? "ครั้ง" : "thread"}</span></div>`);
           box.appendChild(head);
+          const rows = document.createElement("div");
+          rows.className = "threadGroupRows";
+          rows.style.display = open ? "" : "none";
+          head.onclick = () => {
+            if (threadGroupsOpen.has(groupKey)) threadGroupsOpen.delete(groupKey);
+            else threadGroupsOpen.add(groupKey);
+            openSettings("threads");
+          };
           for (const s of list.slice().sort((a, b) => b.ts - a.ts)) {
             const row = document.createElement("div");
             row.className = "arow";
@@ -3141,19 +3854,34 @@
               e.stopPropagation();
               api("/sessions/delete", { agent: aid, key: s.key }).then(() => openSettings("threads"));
             };
-            box.appendChild(row);
+            rows.appendChild(row);
           }
+          box.appendChild(rows);
         }
       });
     } else {
       const list = modalCard.querySelector("#rlist");
+      const defSel = modalCard.querySelector("#defaultRuntimeSel");
+      if (defSel) {
+        defSel.value = normRuntime(DEFAULT_RUNTIME) || "claude";
+        defSel.onchange = () => api("/registry/runtime", { defaultRuntime: defSel.value });
+      }
       for (const r of REGROLES) {
+        const p = roleProfile(r);
+        const rr = normRuntime(p.runtime);
+        const info = rr
+          ? { runtime: rr, source: "role" }
+          : { runtime: normRuntime(DEFAULT_RUNTIME) || "claude", source: "default" };
         const row = document.createElement("div");
         row.className = "arow";
-        row.style.cursor = "default";
-        row.innerHTML = `<div class="meta"><b>${r}</b></div>` +
+        row.innerHTML = `<div class="meta"><b>${esc(r)} ${runtimeBadgeHtml(info)}</b>` +
+          `<span>${p.tier ? "tier " + p.tier + " · " : ""}` +
+          `🎯${(p.skills || []).length} · 🔧${(p.tools || []).length}` +
+          `${roleSeed(p) ? " · persona seed" : ""}</span></div>` +
           `<div class="winbtn hide" title="Remove role">✕</div>`;
-        row.querySelector(".winbtn").onclick = async () => {
+        row.onclick = () => openRoleEditor(r);
+        row.querySelector(".winbtn").onclick = async (e) => {
+          e.stopPropagation();
           if (!await confirmDanger(`${t("ลบ role")}: ${r}`,
               t("role นี้จะถูกลบออกจากรายการ — agents ที่ตั้ง role นี้ไว้จะยังอยู่ แต่ role จะหายไป"), t("ลบ role"))) return;
           api("/registry/role", { name: r, remove: true }).then(() => openSettings("roles"));
@@ -3165,6 +3893,56 @@
         if (v) api("/registry/role", { name: v }).then(() => openSettings("roles"));
       };
     }
+  }
+
+  function openRoleEditor(name) {
+    modal.classList.add("open");
+    const p = roleProfile(name);
+    const mySkills = new Set(Array.isArray(p.skills) ? p.skills : []);
+    const myTools = new Set(Array.isArray(p.tools) ? p.tools : []);
+    modalCard.innerHTML = hdr("🧩 ROLE TEMPLATE") +
+      `<div class="field"><label>JOB TITLE</label><input id="rName" maxlength="40" readonly></div>
+       <div class="field"><label>⚙ RUNTIME — agents with this role inherit it unless they override</label>
+         <select id="rRuntime">
+           <option value="">Inherit default (${runtimeName(DEFAULT_RUNTIME)})</option>
+           ${RUNTIMES.map((r) => `<option value="${r}">${runtimeName(r)}</option>`).join("")}
+         </select></div>
+       <div class="field"><label>🏢 DEFAULT LEVEL</label><select id="rTier">
+         <option value="">No template</option>
+         <option value="2">หัวหน้าทีม (Lead)</option>
+         <option value="3">ทีมงาน (Staff)</option>
+       </select></div>
+       <div class="field"><label>✨ PERSONA SEED — seed text for future role-based drafting</label>
+         <textarea id="rPersona" style="min-height:82px" placeholder="What agents in this role usually are responsible for, style, constraints..."></textarea></div>
+       <div class="field"><label>🎯 DEFAULT SKILLS</label><div class="checks" id="rSkills"></div></div>
+       <div class="field"><label>🔧 DEFAULT TOOLS</label><div class="checks" id="rTools"></div></div>
+       <div class="btnrow">
+         <button id="rCancel">Cancel</button>
+         <button class="primary" id="rSave">💾 Save</button>
+       </div>`;
+    modalCard.querySelector("#rName").value = name;
+    modalCard.querySelector("#rRuntime").value = normRuntime(p.runtime);
+    modalCard.querySelector("#rTier").value = p.tier ? String(p.tier) : "";
+    modalCard.querySelector("#rPersona").value = roleSeed(p);
+    buildChipPicker(modalCard.querySelector("#rSkills"), Object.keys(REGSKILLS).map((sid) =>
+      ({ val: sid, label: REGSKILLS[sid].name, tip: REGSKILLS[sid].description || "" })), mySkills);
+    buildChipPicker(modalCard.querySelector("#rTools"), REGTOOLS.map((t) =>
+      ({ val: t, label: t, tip: BUILTIN_DESC[t] || "" }))
+      .concat(Object.keys(REGMCP).map((n) => ({ val: "mcp:" + n, label: "🔌 " + n, tip: (REGMCP[n] || {}).command || "" }))), myTools);
+    modalCard.querySelector("#rCancel").onclick = () => openSettings("roles");
+    modalCard.querySelector("#rSave").onclick = async () => {
+      await api("/registry/role", {
+        name,
+        profile: {
+          runtime: modalCard.querySelector("#rRuntime").value,
+          tier: modalCard.querySelector("#rTier").value || undefined,
+          personaSeed: modalCard.querySelector("#rPersona").value,
+          skills: [...mySkills],
+          tools: [...myTools],
+        },
+      });
+      openSettings("roles");
+    };
   }
 
   function openSkillEditor(id) {
@@ -3226,15 +4004,21 @@
          <option value="2">หัวหน้าทีม (Lead)</option>
          <option value="3">ทีมงาน (Staff)</option>
        </select></div>
-       <div class="field"><label>🧠 สมอง (โมเดล/ผู้ให้บริการ) — ดีฟอลต์คือ Claude</label>
-         <select id="eProvider"></select>
-         <div id="eModelWrap" style="position:relative;margin-top:6px">
-           <input id="eModel" autocomplete="off" maxlength="60" style="margin:0;width:100%" placeholder="โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)">
-           <div id="eModelMenu" class="cbmenu"></div>
-         </div>
-         <div id="eProvWarn" style="display:none;margin-top:6px;font-size:11px">
-           <span style="color:#ffb054">⚠ ยังไม่ได้เชื่อมต่อ provider นี้</span>
-           <button class="send" id="eGoConnect" style="margin-left:6px">🔗 ไปหน้า CONNECT</button>
+       <div class="field" id="brainField"><label>⚙ RUNTIME + 🧠 สมอง (โมเดล/ผู้ให้บริการ)</label>
+         <select id="eRuntime" style="display:none"></select>
+         <div class="checks" id="eRuntimeChoices"></div>
+         <div id="eRuntimeHint" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
+         <div style="font-size:10.5px;color:var(--dim);margin:6px 0 4px">Brain/provider settings below apply to Claude runtime only; Codex and Hermes use their own CLI config.</div>
+         <div id="brainModelBlock">
+           <select id="eProvider"></select>
+           <div id="eModelWrap" style="position:relative;margin-top:6px">
+             <input id="eModel" autocomplete="off" maxlength="60" style="margin:0;width:100%" placeholder="โมเดล (เว้นว่าง = ดีฟอลต์ของผู้ให้บริการ)">
+             <div id="eModelMenu" class="cbmenu"></div>
+           </div>
+           <div id="eProvWarn" style="display:none;margin-top:6px;font-size:11px">
+             <span style="color:#ffb054">⚠ ยังไม่ได้เชื่อมต่อ provider นี้</span>
+             <button class="send" id="eGoConnect" style="margin-left:6px">🔗 ไปหน้า CONNECT</button>
+           </div>
          </div>
          <div style="font-size:10.5px;color:var(--dim);margin-top:4px">Claude ใช้ login/แผนเดิม · เจ้าอื่นใช้ key แยก (ประหยัดกว่า)</div>
        </div>
@@ -3316,8 +4100,8 @@
       });
       modalCard.querySelector("#eVoicePlay").onclick = async (e) => {
         const pid = vSel.value;
-        if (!pid) return addChip("เลือกเสียงก่อนนะ");
-        if (!FEATURES.tts) return addChip("🗣 เสียงพูดต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT");
+        if (!pid) return addChip(tr("เลือกเสียงก่อนนะ"));
+        if (!FEATURES.tts) return addChip(tr("🗣 เสียงพูดต้องมี GEMINI_API_KEY — ตั้งใน ⚙ CONNECT"));
         const btn = e.currentTarget;
         btn.textContent = "⏳";
         try {
@@ -3335,64 +4119,6 @@
     // Skill / tool assignment. The flat "every chip always shown" list got unwieldy as
     // the library grew, so: show ONLY what's picked (as removable chips), plus a "＋ add"
     // button that drops a searchable menu of the rest. Re-rendered when the copilot picks.
-    function buildChipPicker(box, items, sel) {
-      if (!box) return;
-      box.style.position = "relative";
-      box.innerHTML = "";
-      const byVal = new Map(items.map((it) => [it.val, it]));
-      const chips = document.createElement("div");
-      chips.className = "checks";
-      const menu = document.createElement("div");
-      menu.className = "cbmenu";
-      const search = document.createElement("input");
-      search.placeholder = "🔍 " + tr("ค้นหา");
-      search.style.cssText = "width:100%;margin:0;border:0;border-bottom:1px solid var(--line);border-radius:9px 9px 0 0;padding:8px 12px;font-size:12px;background:#0e1626;color:var(--text)";
-      const opts = document.createElement("div");
-      menu.append(search, opts);
-      box.append(chips, menu);
-      const addBtn = document.createElement("div");
-      addBtn.className = "chk"; addBtn.style.cssText = "border-style:dashed;cursor:pointer";
-      addBtn.textContent = "＋ " + tr("เพิ่ม");
-      function renderChips() {
-        chips.innerHTML = "";
-        const picked = items.filter((it) => sel.has(it.val));
-        for (const v of sel) if (!byVal.has(v)) picked.push({ val: v, label: v, tip: "" });
-        if (!picked.length) {
-          const e = document.createElement("span");
-          e.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
-          e.textContent = tr("ยังไม่ได้เลือก");
-          chips.appendChild(e);
-        }
-        for (const it of picked) {
-          const c = document.createElement("div");
-          c.className = "chk on"; c.title = it.tip || ""; c.style.cursor = "pointer";
-          c.innerHTML = `${esc(it.label)} <b style="opacity:.6;margin-left:2px">✕</b>`;
-          c.onclick = () => { sel.delete(it.val); renderChips(); if (menu.classList.contains("open")) renderOpts(); };
-          chips.appendChild(c);
-        }
-        chips.appendChild(addBtn);
-      }
-      function renderOpts() {
-        const f = search.value.trim().toLowerCase();
-        const avail = items.filter((it) => !sel.has(it.val) &&
-          (!f || (it.label + " " + (it.tip || "")).toLowerCase().includes(f)));
-        opts.innerHTML = avail.length ? "" : `<div class="cbopt" style="opacity:.55;cursor:default">${tr("ไม่พบ")}</div>`;
-        for (const it of avail) {
-          const o = document.createElement("div");
-          o.className = "cbopt"; o.title = it.tip || ""; o.textContent = it.label;
-          o.onmousedown = (e) => { e.preventDefault(); sel.add(it.val); renderChips(); renderOpts(); search.focus(); };
-          opts.appendChild(o);
-        }
-      }
-      addBtn.onclick = () => {
-        const open = !menu.classList.contains("open");
-        menu.classList.toggle("open", open);
-        if (open) { search.value = ""; renderOpts(); setTimeout(() => search.focus(), 0); }
-      };
-      search.oninput = renderOpts;
-      search.onblur = () => setTimeout(() => menu.classList.remove("open"), 160);
-      renderChips();
-    }
     const skBox = modalCard.querySelector("#eSkills");
     function renderSkillChips() {
       buildChipPicker(skBox, Object.keys(REGSKILLS).map((sid) =>
@@ -3422,6 +4148,7 @@
       };
       grid.appendChild(c);
     }
+    let runtimeForSave = () => "claude";
     const roleSel = modalCard.querySelector("#eRole");
     if (roleSel) {
       for (const r of (REGROLES.length ? REGROLES : ROLES)) {
@@ -3431,6 +4158,64 @@
       }
       roleSel.value = a.role;
       modalCard.querySelector("#eTier").value = String(a.tier || (id === "main" ? 2 : 3));
+      const runtimeSel = modalCard.querySelector("#eRuntime");
+      const runtimeChoices = modalCard.querySelector("#eRuntimeChoices");
+      const runtimeHint = modalCard.querySelector("#eRuntimeHint");
+      const brainField = modalCard.querySelector("#brainField");
+      const brainModelBlock = modalCard.querySelector("#brainModelBlock");
+      let refreshBrainForRuntime = () => {};
+      const inheritedRuntime = () =>
+        normRuntime(roleProfile(roleSel.value).runtime) || normRuntime(DEFAULT_RUNTIME) || "claude";
+      const effectiveRuntimeInEditor = () => normRuntime(runtimeSel && runtimeSel.value) || inheritedRuntime();
+      runtimeForSave = effectiveRuntimeInEditor;
+      let runtimeInitialized = false;
+      const renderRuntimeOptions = () => {
+        if (!runtimeSel) return;
+        const cur = runtimeInitialized ? normRuntime(runtimeSel.value) : normRuntime(a.runtime);
+        runtimeSel.innerHTML = `<option value="">Inherit (${runtimeName(inheritedRuntime())})</option>` +
+          RUNTIMES.map((r) => `<option value="${r}">${runtimeName(r)}</option>`).join("");
+        runtimeSel.value = cur;
+        runtimeInitialized = true;
+      };
+      const renderRuntimeChoices = () => {
+        if (!runtimeChoices || !runtimeSel) return;
+        const inherited = inheritedRuntime();
+        const items = [["", `Inherit (${runtimeName(inherited)})`]]
+          .concat(RUNTIMES.map((r) => [r, runtimeName(r)]));
+        runtimeChoices.innerHTML = "";
+        for (const [value, label] of items) {
+          const c = document.createElement("div");
+          c.className = "chk" + ((normRuntime(runtimeSel.value) || "") === value ? " on" : "");
+          c.textContent = label;
+          c.onclick = () => {
+            runtimeSel.value = value;
+            renderRuntimeChoices();
+            syncRuntimeUI();
+            refreshBrainForRuntime();
+          };
+          runtimeChoices.appendChild(c);
+        }
+      };
+      const syncRuntimeUI = () => {
+        if (!runtimeSel) return;
+        const rt = effectiveRuntimeInEditor();
+        if (runtimeChoices) runtimeChoices.querySelectorAll(".chk").forEach((x, i) => {
+          const value = i === 0 ? "" : normRuntime(RUNTIMES[i - 1]);
+          x.classList.toggle("on", (normRuntime(runtimeSel.value) || "") === value);
+        });
+        if (runtimeHint) runtimeHint.textContent = runtimeSel.value
+          ? `Override: ${runtimeName(rt)}`
+          : `Inherited from ${normRuntime(roleProfile(roleSel.value).runtime) ? "role" : "default"}: ${runtimeName(rt)}`;
+        if (brainField) brainField.style.display = "";
+        if (brainModelBlock) brainModelBlock.style.display = rt === "claude" ? "" : "none";
+      };
+      if (runtimeSel) {
+        renderRuntimeOptions();
+        renderRuntimeChoices();
+        runtimeSel.onchange = () => { renderRuntimeChoices(); syncRuntimeUI(); refreshBrainForRuntime(); };
+      }
+      roleSel.onchange = () => { renderRuntimeOptions(); renderRuntimeChoices(); syncRuntimeUI(); refreshBrainForRuntime(); };
+      syncRuntimeUI();
     // 🧠 swappable brain picker (per agent). Provider labels are proper nouns
     // (untranslated); the token row shows for any non-Claude backend.
     const provSel = modalCard.querySelector("#eProvider");
@@ -3514,6 +4299,12 @@
       modelInput.oninput = showMenu;
       modelInput.onblur = () => setTimeout(() => modelMenu.classList.remove("open"), 150);
       const renderModels = (provChanged) => {
+        if (effectiveRuntimeInEditor() !== "claude") {
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.title = ""; }
+          warn.style.display = "none";
+          modelWrap.style.display = "none";
+          return;
+        }
         const p = provSel.value;
         const connected = p === "claude" ? true : !!(pcAll[p] && pcAll[p].connected);
         // Can't save an agent onto a provider that isn't connected yet.
@@ -3533,9 +4324,10 @@
         // sensible default (first usable model) so the field is never left invalid.
         // Default to the provider's BEST / NEWEST model (a quiet nudge toward the latest);
         // fall back to the first usable one. Never the blank/implicit model.
-        const def = BEST_MODEL[p] || curModels.find(Boolean) || "";
+        const def = p === "claude" ? "" : (BEST_MODEL[p] || curModels.find(Boolean) || "");
         modelInput.value = (!provChanged && a.model && p === (a.provider || "claude")) ? a.model : def;
       };
+      refreshBrainForRuntime = () => renderModels(false);
       buildProviderOptions();
       provSel.onchange = () => { renderModels(true); refreshModels(provSel.value); };
       renderModels(false);
@@ -3554,6 +4346,7 @@
             name: modalCard.querySelector("#eName").value || "Agent",
             role: roleSel.value,
             brief: modalCard.querySelector("#eBrief").value,
+            lang: LANG,
           });
           // The copilot fills EVERY persona field it designed.
           if (r.prompt) modalCard.querySelector("#ePrompt").value = r.prompt;
@@ -3582,8 +4375,13 @@
             prompt: modalCard.querySelector("#ePrompt").value,
             tier: Number(modalCard.querySelector("#eTier").value) || 3,
             voice: (modalCard.querySelector("#eVoice") || {}).value || "",
-            provider: (modalCard.querySelector("#eProvider") || {}).value || "claude",
-            model: (modalCard.querySelector("#eModel") || {}).value || "",
+            runtime: (modalCard.querySelector("#eRuntime") || {}).value || "",
+            provider: runtimeForSave() !== "claude"
+              ? (a.provider || "claude")
+              : ((modalCard.querySelector("#eProvider") || {}).value || "claude"),
+            model: runtimeForSave() !== "claude"
+              ? (a.model || "")
+              : ((modalCard.querySelector("#eModel") || {}).value || ""),
             persona: {
               expertise: modalCard.querySelector("#eExpertise").value,
               personality: modalCard.querySelector("#ePersonality").value,
@@ -3726,6 +4524,10 @@
 
   // ---- 🧩 plugins: list + open a plugin's panel inside the modal -----------
   document.getElementById("pluginBtn").onclick = () => openPlugins();
+  document.getElementById("meetingsBtn").onclick = () => {
+    document.getElementById("moreMenu").classList.remove("open");
+    openSettings("threads");
+  };
   // 🔀 human-language Workflow Builder — its own resizable window
   document.getElementById("workflowBtn").onclick = () => {
     document.getElementById("moreMenu").classList.remove("open");
@@ -3744,7 +4546,7 @@
   // 🎨 opens the full standalone 3D editor window (the daemon launches Godot).
   document.getElementById("editBtn").onclick = () => {
     api("/editor/open", {});
-    addChip("🎨 กำลังเปิด 3D Editor (หน้าต่างแยก)… จัดของเสร็จกดบันทึก แล้ววอลเปเปอร์อัปเดตทันที");
+    addChip(tr("🎨 กำลังเปิด 3D Editor (หน้าต่างแยก)… จัดของเสร็จกดบันทึก แล้ววอลเปเปอร์อัปเดตทันที"));
   };
   async function openPlugins() {
     modal.classList.add("open");
@@ -3845,11 +4647,11 @@
     modalCard.querySelector("#plgReload").onclick = () =>
       api("/plugins/reload", {}).then(() => openPlugins());
     const doInstall = async (url, mode) => {
-      addChip("📦 กำลังติดตั้ง plugin…");
+      addChip(tr("📦 กำลังติดตั้ง plugin…"));
       const r2 = await fetch("/plugins/install", { method: "POST",
         headers: { "content-type": "application/json", "x-bagidea-ui": "1" },
         body: JSON.stringify({ url, mode: mode || "" }) });
-      if (r2.ok) { addChip("✅ ติดตั้ง plugin แล้ว"); openPlugins(); return; }
+      if (r2.ok) { addChip(tr("✅ ติดตั้ง plugin แล้ว")); openPlugins(); return; }
       if (r2.status === 409) {   // already installed → overwrite or new copy?
         const j = await r2.json().catch(() => ({}));
         const choice = await dupChoice(j.id || "");
@@ -3973,7 +4775,7 @@
     modalCard.querySelector("#edClear").onclick = () => { EDIT.items = []; EDIT.sel = -1; edRender(); };
     modalCard.querySelector("#edSave").onclick = async () => {
       await api("/layout", { items: EDIT.items });
-      addChip("🎨 บันทึกผังออฟฟิศแล้ว — โลกอัปเดตทันที");
+      addChip(tr("🎨 บันทึกผังออฟฟิศแล้ว — โลกอัปเดตทันที"));
       closeModal();
     };
     edRender();
@@ -3988,7 +4790,7 @@
       const up = await fetch("/upload", { method: "POST",
         headers: { "x-file-name": encodeURIComponent(f.name) }, body: f }).then((x) => x.json());
       EDIT.asset = up.path || up.url;
-      addChip("📎 พร้อมวาง: " + (up.name || f.name));
+      addChip(tr("📎 พร้อมวาง:") + " " + (up.name || f.name));
     };
     inp.click();
   }
@@ -4234,10 +5036,10 @@
           // WHO is in here: you (window) and/or named agents — explicit.
           const who = (p.agents || []).map(nameOf).join(", ");
           const st = [];
-          if (p.open && p.visible) st.push(`<span style="color:#4ade80">🖥 คุณเปิดทำงานอยู่</span>`);
-          else if (p.open) st.push(`<span style="color:#c0a4ff">🫥 ของคุณทำงานเบื้องหลัง</span>`);
-          if (p.ai) st.push(`<span style="color:#5ec8ff">🤖 ${who || "agent"} กำลังทำงาน</span>`);
-          if (!st.length) st.push(`<span style="color:var(--dim)">⚪ ปิด — ไม่มีใครทำงาน</span>`);
+          if (p.open && p.visible) st.push(`<span style="color:#4ade80">${tr("🖥 คุณเปิดทำงานอยู่")}</span>`);
+          else if (p.open) st.push(`<span style="color:#c0a4ff">${tr("🫥 ของคุณทำงานเบื้องหลัง")}</span>`);
+          if (p.ai) st.push(`<span style="color:#5ec8ff">🤖 ${who || "agent"} ${tr("กำลังทำงาน")}</span>`);
+          if (!st.length) st.push(`<span style="color:var(--dim)">${tr("⚪ ปิด — ไม่มีใครทำงาน")}</span>`);
           // State-driven controls: closed → เปิด; visible → ซ่อน+ปิด;
           // hidden → Resume+ปิด. Shell/folder always; ✕ always; 🗑 created-only.
           // While an AGENT works here the project is LOCKED to you — the only
@@ -4285,12 +5087,12 @@
               if (!armed) {
                 armed = true;
                 b[0].classList.add("arm");
-                b[0].textContent = "⏹ ยืนยันหยุด?";
-                setTimeout(() => { armed = false; b[0].classList.remove("arm"); b[0].textContent = "⏹ หยุด agent"; }, 4000);
+                b[0].textContent = tr("⏹ ยืนยันหยุด?");
+                setTimeout(() => { armed = false; b[0].classList.remove("arm"); b[0].textContent = tr("⏹ หยุด agent"); }, 4000);
                 return;
               }
               await api("/projects/stopwork", { id: p.id });
-              addChip("⏹ หยุดงาน agent แล้ว — เปิดโปรเจคเข้าไปทำต่อได้เลย");
+        addChip(tr("⏹ หยุดงาน agent แล้ว — เปิดโปรเจคเข้าไปทำต่อได้เลย"));
               refresh();
             };
           } else if (!p.open) {
@@ -4473,9 +5275,9 @@
           const b = card.querySelectorAll(".winbtn:not(.pinbtn)");
           const msgOf = () => (card.querySelector(".prMsg").value || "").trim();
           b[0].onclick = () => api("/proposals/respond", { id: p.id, decision: "approve", message: msgOf() })
-            .then(() => { addChip("✅ อนุมัติแล้ว — Director กำลังจัดทีม"); openOps("jobs"); });
+            .then(() => { addChip(tr("✅ อนุมัติแล้ว — Director กำลังจัดทีม")); openOps("jobs"); });
           b[1].onclick = () => api("/proposals/respond", { id: p.id, decision: "reject", message: msgOf() })
-            .then(() => { addChip("ส่งคำตอบให้ทีมแล้ว"); openOps("jobs"); });
+            .then(() => { addChip(tr("ส่งคำตอบให้ทีมแล้ว")); openOps("jobs"); });
           const chk = card.querySelector(".prChk");
           chk.onchange = () => { chk.checked ? selected.add(p.id) : selected.delete(p.id); syncSelBtn(); };
           box.appendChild(card);
@@ -4556,14 +5358,14 @@
           row.style.display = ""; row.innerHTML = "";
           const f = document.createElement("div"); f.className = "face"; face(f, j.agent, 30);
           row.appendChild(f);
-          const desc = j.running ? `🔴 กำลังทำงานนี้อยู่…`
+          const desc = j.running ? tr("🔴 กำลังทำงานนี้อยู่…")
             : j.mode === "every" ? `🔁 ทุก ${j.everyMin} นาที`
             : j.mode === "at" && j.daily ? `🔁 ทุกวัน ${j.time}`
             : j.mode === "at" ? `🕐 ${new Date(j.at).toLocaleString()}`
             : "⚡ ทันที";
           row.insertAdjacentHTML("beforeend",
             `<div class="meta"><b>${j.prompt.slice(0, 56).replace(/</g, "&lt;")}</b>
-               <span>${nameOf(j.agent)} · ${desc}${j.enabled === false ? " · ⏸ พัก" : ""}${(!j.running && j.lastRun) ? " · ล่าสุด " + new Date(j.lastRun).toLocaleTimeString() : ""}</span></div>` +
+               <span>${nameOf(j.agent)} · ${desc}${j.enabled === false ? tr(" · ⏸ พัก") : ""}${(!j.running && j.lastRun) ? tr(" · ล่าสุด ") + new Date(j.lastRun).toLocaleTimeString() : ""}</span></div>` +
             (j.running ? "" :
               `<div class="winbtn" title="แก้ไข">✎</div>
                <div class="winbtn" title="พัก/เล่น">${j.enabled === false ? "▶" : "⏸"}</div>`) +
@@ -4722,7 +5524,7 @@
       fetch("/office-md").then((x) => x.text()).then((t) => { if (ta) ta.value = t; });
       modalCard.querySelector("#officeSave").onclick = async () => {
         await api("/office-md", { text: ta.value });
-        addChip("🏛 บันทึก OFFICE.md แล้ว — agents เห็นเวอร์ชันใหม่ใน session ถัดไป");
+        addChip(tr("🏛 บันทึก OFFICE.md แล้ว — agents เห็นเวอร์ชันใหม่ใน session ถัดไป"));
         closeModal();
       };
     } else {
@@ -4765,7 +5567,9 @@
   // ---- sessions (threads) ---------------------------------------------------
   const SESS = {};  // target -> "new" | session key | undefined (= latest)
   const CUR = {};   // target -> resolved current thread key (for filtering)
+  const LAST_GROUP_VIEW = {};  // target -> last seen group/sub log
   let groupView = null;  // meeting key while reading/watching a group session
+  let groupViewMeta = { key: null, title: "", bucket: "@group", faceId: null };
   function setThreadLabel(t) { document.getElementById("threadName").textContent = t; }
   function fmtTok(n) { n = +n || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -4808,10 +5612,11 @@
   // one read-only in the chat pane; live messages keep streaming in.
   async function openGroupLog(key, title, bucket = "@group", faceId = null) {
     groupView = key;
+    groupViewMeta = { key, title, bucket, faceId };
     setThreadLabel((bucket === "@sub" ? "👻 " : "🗣 ") + title);
     document.getElementById("inp").placeholder = bucket === "@sub"
-      ? "งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย"
-      : "บันทึกการประชุม (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย";
+      ? tr("งานของ sub-agent (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย")
+      : tr("บันทึกการประชุม (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย");
     log.innerHTML = "";
     let live = false;
     try {
@@ -4819,24 +5624,10 @@
         .then((x) => x.json());
       live = !!r.live;
       for (const m of r.log || []) {
+        if (!ACTIVITY_FILTER.showThread(m)) continue;
         renderGroupMsg(m, faceId);
       }
     } catch {}
-    // Load historical action items for finished meetings (if any)
-    if (!live && bucket === "@group") {
-      try {
-        const actionsRes = await fetch(`/sessions/${encodeURIComponent(key)}/actions`);
-        if (actionsRes.ok) {
-          const { actions } = await actionsRes.json();
-          if (actions && actions.length) {
-            for (const a of actions) {
-              const ownerName = (reg.agents[a.owner] || { name: a.owner }).name;
-              addMsg("you", null, `✅ <b>${ownerName}</b>: ${a.text}`, a.created, "· action item");
-            }
-          }
-        }
-      } catch {}
-    }
     // Speak bar shows ONLY on the exact live meeting — never on a finished log
     // or a @sub log. liveMeetings is kept in sync by meeting.live/ended events.
     syncSpeakBar(key, live);
@@ -4846,6 +5637,7 @@
   // history replay (above) and the live chat.message handler use one path.
   function renderGroupMsg(m, faceId) {
     if (m.who === "tool") addToolRow(m.text);
+    else if (m.isSummary || m.phase === "summary") addMsg("agent summary", faceId || m.who || "main", "📝\n" + m.text, m.ts, "· conclusion");
     else if (m.who === "you") addMsg("you", null, m.text, m.ts);
     else if (m.who === "ceo") addMsg("you", null, m.text, m.ts);   // CEO = you
     else addMsg("agent", faceId || m.who, m.text, m.ts, m.phase ? "· " + m.phase : "");
@@ -4902,7 +5694,9 @@
       const r = await fetch(`/sessions/log?agent=${encodeURIComponent(sessAgent())}&key=${encodeURIComponent(key)}`)
         .then((x) => x.json());
       for (const m of r.log || []) {
+        if (!ACTIVITY_FILTER.showThread(m)) continue;
         if (m.who === "tool") addToolRow(m.text);
+        else if (m.phase === "meeting-summary" || m.meeting) addMeetingTrace(m);
         else addMsg(m.who === "you" ? "you" : "agent", m.who === "you" ? null : sessAgent(), m.text, m.ts,
           m.who !== "you" && m.model ? "🧠 " + m.model : "");
       }
@@ -4916,14 +5710,14 @@
       CUR[target] = null;
       log.innerHTML = "";
       setThreadCtx(null);
-      return setThreadLabel("🆕 thread ใหม่ — เริ่มเมื่อส่งข้อความแรก");
+      return setThreadLabel(tr("🆕 thread ใหม่ — เริ่มเมื่อส่งข้อความแรก"));
     }
     try {
       const r = await fetch(`/sessions?agent=${encodeURIComponent(sessAgent())}`).then((x) => x.json());
       const list = r.sessions || [];
       let cur = SESS[target] ? list.find((s) => s.key === SESS[target]) : null;
       if (!cur) cur = list[0];
-      setThreadLabel((cur ? cur.title : "ยังไม่มี — จะสร้างให้เองเมื่อคุยครั้งแรก") +
+      setThreadLabel((cur ? cur.title : tr("ยังไม่มี — จะสร้างให้เองเมื่อคุยครั้งแรก")) +
         (cur && cur.proj ? " · 📁" : ""));
       setThreadCtx(cur && cur.lastUsage);   // restore the saved usage meter on reopen
       const key = cur ? cur.key : null;
@@ -4931,7 +5725,7 @@
         CUR[target] = key;
         await loadThreadLog(key);
       }
-    } catch { setThreadLabel("ล่าสุด"); }
+    } catch { setThreadLabel(tr("ล่าสุด")); }
   }
 
   document.getElementById("sessBtn").onclick = async (e) => {
@@ -4951,16 +5745,16 @@
       o.onclick = () => { onpick(); m.classList.remove("open"); refreshThreadBar(); };
       m.appendChild(o);
     };
-    mk("🆕 เริ่ม thread ใหม่", "ความจำใหม่ ไม่ต่อจากของเดิม", "new",
+    mk(tr("🆕 เริ่ม thread ใหม่"), tr("ความจำใหม่ ไม่ต่อจากของเดิม"), "new",
       SESS[target] === "new",
-      () => { groupView = null; hideSpeakBar(); SESS[target] = "new"; addChip(`🧵 เริ่ม thread ใหม่กับ <b>${nameOf(target)}</b>`); });
+      () => { groupView = null; hideSpeakBar(); SESS[target] = "new"; addChip(`${tr("🧵 เริ่ม thread ใหม่กับ")} <b>${nameOf(target)}</b>`); });
     for (const s of list)
       mk(`🧵 ${s.title || s.key}`, new Date(s.ts).toLocaleString(), s.key,
         !groupView && SESS[target] !== "new" && s.key === activeKey,
         () => { groupView = null; hideSpeakBar(); CUR[target] = null; SESS[target] = s.key;
-          addChip(`🧵 สลับไป thread: <b>${(s.title || s.key).slice(0, 40)}</b>`); });
+          addChip(`${tr("🧵 สลับไป thread:")} <b>${(s.title || s.key).slice(0, 40)}</b>`); });
     if (!list.length && SESS[target] !== "new")
-      mk("(ยังไม่มี thread เก่า — คุยครั้งแรกจะสร้างให้เอง)", "", undefined, false, () => {});
+      mk(tr("(ยังไม่มี thread เก่า — คุยครั้งแรกจะสร้างให้เอง)"), "", undefined, false, () => {});
     // 🗣 group sessions: every meeting, readable any time
     try {
       const g = await fetch(`/sessions?agent=${encodeURIComponent("@group")}`).then((x) => x.json());
@@ -4971,7 +5765,7 @@
         hd.style.cursor = "default";
         hd.style.color = "var(--dim)";
         hd.style.fontSize = "10.5px";
-        hd.textContent = "—  🗣 การประชุม  —";
+        hd.textContent = tr("—  🗣 会议记录  —");
         m.appendChild(hd);
         for (const s of meets) {
           const o = document.createElement("div");
@@ -5020,8 +5814,8 @@
           sub.style.display = "block";
           sub.style.color = "var(--dim)";
           sub.style.fontSize = "10px";
-          sub.textContent = `ร่างแยกของ ${nameOf(s.parent)} · ` +
-            (s.ok === false ? "✗ ล้มเหลว" : s.ok ? "✓ สำเร็จ" : "⏳ กำลังทำ") +
+          sub.textContent = `${tr("ร่างแยกของ")} ${nameOf(s.parent)} · ` +
+            (s.ok === false ? tr("✗ ล้มเหลว") : s.ok ? tr("✓ สำเร็จ") : tr("⏳ กำลังทำ")) +
             ` · ${new Date(s.ts).toLocaleString()}`;
           o.append(top, sub);
           o.onclick = () => { m.classList.remove("open");
@@ -5067,6 +5861,7 @@
   function openDiscuss() {
     modal.classList.add("open");
     const picked = new Set();
+    const selectedHistory = new Set();
     const tmplOpts = MEETING_TEMPLATES
       .map((t) => `<option value="${t.id}">${t.label}</option>`).join("");
     modalCard.innerHTML = hdr("🗣 AGENT DISCUSSION") +
@@ -5076,20 +5871,81 @@
          <input id="dTopic" placeholder='เช่น "วางแผนฟีเจอร์ onboarding ใหม่"'></div>
        <div class="field"><label>PARTICIPANTS (เลือก 2-4 ตัว)</label>
          <div class="checks" id="dWho"></div></div>
-       <div class="field"><label>DISCUSSION ROUNDS (ความลึกของวงถก)</label>
-         <select id="dRounds"><option value="1">1 — เร็ว</option>
-         <option value="2" selected>2 — มาตรฐาน</option><option value="3">3 — ลึก</option></select></div>
+	       <div class="field"><label>DISCUSSION ROUNDS (ความลึกของวงถก)</label>
+	         <select id="dRounds">
+	           <option value="1">1 discussion round</option>
+	           <option value="2" selected>2 discussion rounds</option>
+	           <option value="3">3 discussion rounds</option>
+	           <option value="4">4 discussion rounds</option>
+	           <option value="5">5 discussion rounds</option>
+	           <option value="6">6 discussion rounds</option>
+	         </select>
+	         <div id="roundHint" style="font-size:11px;color:var(--dim);margin-top:5px"></div></div>
+       <div class="field"><label>相关历史会议总结（可选，默认不带入）</label>
+         <input id="dHistoryQ" placeholder="搜索会议标题、总结、参与者…">
+         <div id="dHistoryHint" style="font-size:11px;color:var(--dim);margin-top:5px">未选择历史会议。</div>
+         <div class="meetingHistoryList" id="dHistoryList" style="margin-top:6px"></div></div>
        <div class="btnrow">
          <button id="dCancel">Cancel</button>
          <button class="primary" id="dGo">🗣 Start discussion</button>
        </div>`;
     // Picking a template fills topic + rounds (unless the user edits them after).
+    const updateRoundHint = () => {
+      const n = picked.size;
+      const r = Math.max(1, Number(modalCard.querySelector("#dRounds").value) || 2);
+      const turns = n ? n * (1 + r) : 0;
+      modalCard.querySelector("#roundHint").textContent =
+        n ? `量化: ${n} 人 x (1 轮 opening + ${r} 轮 discussion) = ${turns} 次发言，结束后自动生成总结和结论。`
+          : `量化: 每人 1 轮 opening + N 轮 discussion，结束后自动生成总结和结论。`;
+    };
     modalCard.querySelector("#dTmpl").onchange = function () {
       const t = MEETING_TEMPLATES.find((x) => x.id === this.value);
       if (!t) return;
       if (t.topic) modalCard.querySelector("#dTopic").value = t.topic;
       modalCard.querySelector("#dRounds").value = String(t.rounds);
+      updateRoundHint();
     };
+    modalCard.querySelector("#dRounds").onchange = updateRoundHint;
+    const historyHint = modalCard.querySelector("#dHistoryHint");
+    const historyList = modalCard.querySelector("#dHistoryList");
+    const updateHistoryHint = () => {
+      historyHint.textContent = selectedHistory.size
+        ? `已选择 ${selectedHistory.size} 个历史会议总结，会在 opening 阶段带入。`
+        : "未选择历史会议。";
+    };
+    const renderHistory = (items) => {
+      historyList.innerHTML = "";
+      if (!items.length) {
+        historyList.innerHTML = `<div style="font-size:11.5px;color:var(--dim)">没有找到可用的历史会议总结。</div>`;
+        return;
+      }
+      for (const m of items) {
+        const row = document.createElement("div");
+        row.className = "meetingHistoryItem" + (selectedHistory.has(m.key) ? " on" : "");
+        row.innerHTML =
+          `<b>${esc(m.title || m.key)}</b>` +
+          `<span>${esc(new Date(m.ts || Date.now()).toLocaleString())} · ${esc((m.names || m.agents || []).join(", "))}</span>` +
+          `<p>${esc(String(m.summary || "").replace(/\s+/g, " ").slice(0, 220))}</p>`;
+        row.onclick = () => {
+          if (selectedHistory.has(m.key)) selectedHistory.delete(m.key);
+          else if (selectedHistory.size < 5) selectedHistory.add(m.key);
+          row.classList.toggle("on", selectedHistory.has(m.key));
+          updateHistoryHint();
+        };
+        historyList.appendChild(row);
+      }
+    };
+    const searchHistory = async () => {
+      const q = modalCard.querySelector("#dHistoryQ").value.trim();
+      const r = await fetch(`/meetings/search?q=${encodeURIComponent(q)}&limit=12`).then((x) => x.json()).catch(() => ({ meetings: [] }));
+      renderHistory(r.meetings || []);
+    };
+    let historyTimer = null;
+    modalCard.querySelector("#dHistoryQ").oninput = () => {
+      clearTimeout(historyTimer);
+      historyTimer = setTimeout(searchHistory, 250);
+    };
+    searchHistory();
     const box = modalCard.querySelector("#dWho");
     // ทีมทั้งหมดจาก registry (CEO คือคุณ — ไม่เข้าร่วมวงประชุมของ AI)
     for (const id of Object.keys(ROSTER).filter((x) => x !== "ceo")) {
@@ -5103,17 +5959,19 @@
       f.style.backgroundPosition = `${-14 * k}px ${-14 * k}px`;
       c.appendChild(f);
       c.appendChild(document.createTextNode(`${nameOf(id)} · ${roleOf(id)}`));
-      c.onclick = () => { picked.has(id) ? picked.delete(id) : picked.add(id); c.classList.toggle("on"); };
+      c.onclick = () => { picked.has(id) ? picked.delete(id) : picked.add(id); c.classList.toggle("on"); updateRoundHint(); };
       box.appendChild(c);
     }
+    updateRoundHint();
     modalCard.querySelector("#dCancel").onclick = closeModal;
     modalCard.querySelector("#dGo").onclick = async () => {
       const topic = modalCard.querySelector("#dTopic").value.trim();
       if (!topic || picked.size < 2) return;
       const r = await api("/discuss", { agents: [...picked], topic,
-        rounds: Number(modalCard.querySelector("#dRounds").value) }).catch(() => ({}));
+        rounds: Number(modalCard.querySelector("#dRounds").value),
+        historyMeetings: [...selectedHistory] }).catch(() => ({}));
       closeModal();
-      addChip(`🗣 meeting started: <b>${topic.slice(0, 50)}</b>`);
+      addChip(`${tr("🤝 ประชุมเริ่ม:")} <b>${topic.slice(0, 50)}</b>`);
       // Open the live meeting so messages stream in and the speak bar appears.
       // /discuss returns the session key synchronously; liveMeetings.add is a
       // belt-and-suspenders in case the meeting.live broadcast hasn't landed.
@@ -5125,18 +5983,113 @@
   // ---- top-down map ---------------------------------------------------------
   // World→map transform; must match the ortho render in office_floor.gd.
   const MAP = { x0: -16.9, w: 33.8, z0: -13.0, d: 26.0 };
+  const SEASONS = [
+    ["spring", "🌸 Spring"],
+    ["summer", "☀️ Summer"],
+    ["autumn", "🍂 Autumn"],
+    ["winter", "❄️ Winter"],
+  ];
+  const WEATHER_BY_SEASON = {
+    spring: [["sunny", "Sunny"], ["light_rain", "Light rain"]],
+    summer: [["sunny", "Sunny"], ["light_rain", "Light rain"], ["storm", "Storm"]],
+    autumn: [["sunny", "Sunny"], ["light_rain", "Light rain"]],
+    winter: [["sunny", "Sunny"], ["snow", "Snow"]],
+  };
+  const WEATHER_AUTO_BY_SEASON = {
+    spring: [
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+    ],
+    summer: [
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "storm",
+    ],
+    autumn: [
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+      "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+    ],
+    winter: ["sunny", "sunny", "sunny", "snow"],
+  };
+  let seasonOffset = 0;
+  let weatherOffset = 0;
   let mapOpen = false, lastPos = [];
   document.getElementById("mapBtn").onclick = () => openMap();
+
+  function seasonNow() {
+    return SEASONS[(Math.floor(new Date().getHours() / 2) + seasonOffset) % SEASONS.length];
+  }
+
+  function weatherNow() {
+    const season = seasonNow()[0];
+    const opts = WEATHER_BY_SEASON[season] || WEATHER_BY_SEASON.spring;
+    const autoOpts = WEATHER_AUTO_BY_SEASON[season] || opts.map((x) => x[0]);
+    const slot = Math.floor(Date.now() / 3600000);
+    const base = Math.abs(Math.imul(slot ^ (season.length * 131), 1103515245) + 12345);
+    const baseWeather = autoOpts[base % autoOpts.length];
+    const baseIx = Math.max(0, opts.findIndex((x) => x[0] === baseWeather));
+    const ix = weatherOffset === 0 ? baseIx : (baseIx + weatherOffset) % opts.length;
+    return { season, opts, cur: opts[ix] };
+  }
 
   function openMap() {
     modal.classList.add("open");
     mapOpen = true;
     modalCard.innerHTML = hdr("🗺 OFFICE MAP — click an agent to chat") +
-      `<div id="mapWrap"><img id="mapImg" src="/map/bg?t=${Date.now()}"
+      `<div class="btnrow" id="seasonRow" style="margin-bottom:8px;align-items:center">
+         <button id="seasonBtn" class="primary" style="flex:0 0 auto"></button>
+         <button id="weatherBtn" style="flex:0 0 auto"></button>
+         <span class="meta">season every 2h · weather hourly</span>
+       </div>
+       <div class="maplegend" id="mapLegend"></div>
+       <div id="mapWrap"><img id="mapImg" src="/map/bg?t=${Date.now()}"
           onerror="this.style.minHeight='320px'">
         <div id="mapIcons" style="position:absolute;inset:0"></div></div>`;
+    renderSeasonButton();
+    renderWeatherButton();
+    renderMapLegend();
     renderMapIcons();
   }
+
+  function renderMapLegend() {
+    const box = document.getElementById("mapLegend");
+    if (!box) return;
+    box.innerHTML = Object.entries(DOTS).map(([k, v]) =>
+      `<span><i style="background:${v}"></i>${k}</span>`).join("") +
+      `<span><i style="background:#a5b8ff"></i>ghost</span>`;
+  }
+
+  function renderSeasonButton() {
+    const b = document.getElementById("seasonBtn");
+    if (!b) return;
+    const cur = seasonNow();
+    const next = SEASONS[(SEASONS.findIndex((s) => s[0] === cur[0]) + 1) % SEASONS.length];
+    b.textContent = `${cur[1]} → ${next[1]}`;
+    b.title = "Switch office season";
+    b.onclick = async () => {
+      const r = await api("/ui/season", { step: 1 });
+      if (typeof r.offset === "number") seasonOffset = r.offset;
+      renderSeasonButton();
+      renderWeatherButton();
+    };
+  }
+
+  function renderWeatherButton() {
+    const b = document.getElementById("weatherBtn");
+    if (!b) return;
+    const w = weatherNow();
+    const ix = w.opts.findIndex((x) => x[0] === w.cur[0]);
+    const next = w.opts[(ix + 1) % w.opts.length];
+    b.textContent = `Weather: ${w.cur[1]} → ${next[1]}`;
+    b.title = "Switch office weather";
+    b.onclick = async () => {
+      const r = await api("/ui/weather", { step: 1 });
+      if (typeof r.offset === "number") weatherOffset = r.offset;
+      renderWeatherButton();
+    };
+  }
+  setInterval(() => {
+    if (mapOpen) { renderSeasonButton(); renderWeatherButton(); }
+  }, 60000);
 
   function renderMapIcons() {
     if (!mapOpen) return;
@@ -5158,9 +6111,16 @@
       ic.style.backgroundSize = `${256 * k}px ${512 * k}px`;
       ic.style.backgroundPosition = `${-14 * k}px ${-14 * k}px`;
       const label = isGhost ? `👻 ${nameOf(baseId)}` : nameOf(p.id);
-      ic.innerHTML = `<div class="tag">${label}</div>`;
-      ic.title = `${label} — ${p.state}`;
-      if (!isGhost) ic.onclick = () => { closeModal(); setTarget(p.id); };
+      const task = Array.isArray(p.tasks) && p.tasks.length ? p.tasks[0] : "";
+      const tool = p.tool || "";
+      const elapsed = p.elapsed || "";
+      const work = task || tool || elapsed ? `${elapsed ? elapsed + " · " : ""}${tool || task}` : "";
+      ic.innerHTML = `${work ? `<div class="worktag">${esc(work)}</div>` : ""}<div class="tag">${label}</div>`;
+      ic.title = `${label} — ${p.state}${task ? "\n" + task : ""}${tool ? "\n" + tool : ""}${p.session ? "\nthread: " + p.session : ""}`;
+      if (!isGhost) ic.onclick = () => {
+        setTarget(p.id);
+        if (p.session) { SESS[p.id] = p.session; CUR[p.id] = p.session; refreshThreadBar(true); }
+      };
       box.appendChild(ic);
     }
   }
@@ -5272,11 +6232,11 @@
     const pid = String(ev.agent || subId).split("#")[0];
     const tag = subId.includes("#") ? subId.split("#")[1].toUpperCase() : "SUB";
     const gname = `${nameOf(pid)} · ${tag}`;
-    if (ev.replay) return;
-    if (ev.type === "subagent.spawned")
-      addLog(`👻 <b>${gname}</b> แตกร่างขึ้น Ghost Deck — ${String(ev.text || "").slice(0, 60)}`);
-    else if (ev.type === "subagent.done")
-      addLog(`👻 <b>${gname}</b> ${ev.ok ? "งานเสร็จ ✓ กลับเข้าร่าง" : "ล้มเหลว ✗ กลับเข้าร่าง"}`);
+	    if (ev.replay) return;
+	    if (ev.type === "subagent.spawned")
+	      addLog(`👻 <b>${gname}</b> ${tr("แตกร่างขึ้น Ghost Deck")} — ${String(ev.text || "").slice(0, 60)}`);
+	    else if (ev.type === "subagent.done")
+	      addLog(`👻 <b>${gname}</b> ${tr(ev.ok ? "งานเสร็จ ✓ กลับเข้าร่าง" : "ล้มเหลว ✗ กลับเข้าร่าง")}`);
     else if (ev.type === "subagent.progress") {
       addLog(`⚙ <b>${ev.tool || "…"}</b> — 👻 ${gname}`);
       if (groupView && ev.session === groupView) { addToolRow(ev.tool || "…"); showTyping("⚙", toolLabel(ev.tool)); }
@@ -5287,18 +6247,28 @@
     else if (ev.type === "perm.requested") addPermCard({ ...ev, agent: gname });
     else if (ev.type === "perm.approved" || ev.type === "perm.denied") {
       removePermCard(ev.perm);
-      addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? "allowed" : "denied"}</b> (👻 ${gname})`);
+	      addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? tr("อนุญาต") : tr("ปฏิเสธ")}</b> (👻 ${gname})`);
     }
   }
 
   // ---- event routing --------------------------------------------------------
   function route(ev) {
-    if (ev.type === "world.pos") {
-      lastPos = ev.agents || [];
-      if (mapOpen) renderMapIcons();
-      return;
-    }
-    if (ev.type === "ui.mapbg") {
+	    if (ev.type === "world.pos") {
+	      lastPos = ev.agents || [];
+	      if (mapOpen) renderMapIcons();
+	      return;
+	    }
+	    if (ev.type === "ui.season") {
+	      if (typeof ev.offset === "number") seasonOffset = ev.offset;
+	      if (mapOpen) { renderSeasonButton(); renderWeatherButton(); }
+	      return;
+	    }
+	    if (ev.type === "ui.weather") {
+	      if (typeof ev.offset === "number") weatherOffset = ev.offset;
+	      if (mapOpen) renderWeatherButton();
+	      return;
+	    }
+	    if (ev.type === "ui.mapbg") {
       const im = document.getElementById("mapImg");
       if (im) im.src = "/map/bg?t=" + Date.now();
       return;
@@ -5310,22 +6280,30 @@
     }
     if (ev.type === "roster.sync") {
       ROSTER = ev.agents || {};
+      railOrder = Array.isArray(ev.agentOrder) ? ev.agentOrder.slice() : Object.keys(ROSTER);
       REGROLES = ev.roles || [];
+      REGROLEPROFILES = ev.roleProfiles || {};
+      DEFAULT_RUNTIME = normRuntime(ev.defaultRuntime) || "claude";
+      RUNTIMES = (ev.runtimes || ["claude", "codex", "hermes"]).map(normRuntime).filter(Boolean);
+      if (!RUNTIMES.length) RUNTIMES = ["claude", "codex", "hermes"];
       REGSKILLS = ev.skills || {};
       REGTOOLS = ev.tools || [];
       BUILTIN_DESC = ev.builtinTools || {};
       REGMCP = ev.mcp || {};
       AUTOSKILLS = ev.autoSkills !== false;
       VERIFY = ev.verifyDelegated === true;
-      SOUND = ev.sound !== false;
-      if (typeof ev.monitor === "number") monMode = ev.monitor;
-      if (typeof ev.monitors === "number") monCount = Math.max(1, ev.monitors);
-      try { refreshDispVisibility(); } catch {}
+	      SOUND = ev.sound !== false;
+	      if (typeof ev.monitor === "number") monMode = ev.monitor;
+	      if (typeof ev.monitors === "number") monCount = Math.max(1, ev.monitors);
+	      if (typeof ev.seasonOffset === "number") seasonOffset = ev.seasonOffset;
+	      if (typeof ev.weatherOffset === "number") weatherOffset = ev.weatherOffset;
+	      try { refreshDispVisibility(); } catch {}
       HEARTBEAT = Number(ev.heartbeatMin || 0);
       if (ev.features) FEATURES = ev.features;
       TTSON = ev.tts !== false;
       SOCIALMIN = Number(ev.socialMin !== undefined ? ev.socialMin : 60);
       PROPOSALMIN = Number(ev.proposalMin !== undefined ? ev.proposalMin : 120);
+      UPDATECHECKS = ev.updateChecks === true;
       MAXSTAFF = Number(ev.maxStaff || 18);
       // Machine default language (registry) applies only when the user hasn't
       // pinned one in this webview. Reload once so the UI re-renders in it.
@@ -5337,7 +6315,11 @@
         }
       } catch {}
       gateVoiceUI();
+      // The journal can replay events from agents that were removed or renamed.
+      // The rail is roster chrome, so keep it pinned to registry.json.
+      for (const id of Object.keys(agents)) if (!isRosterAgent(id)) delete agents[id];
       for (const id of Object.keys(ROSTER)) ensureAgent(id);
+      if (!isRosterAgent(target)) target = ROSTER.ceo ? "ceo" : (ROSTER.main ? "main" : Object.keys(ROSTER)[0]);
       renderRail();
       setTarget(target);   // refresh name/role if the target was edited
       return;
@@ -5390,12 +6372,13 @@
       return;
     }
     if (ev.type === "update.available") {
+      if (!UPDATECHECKS) return;
       const bar = document.getElementById("updBar");
       const ver = ev.version || ev.sha || "";
       document.getElementById("updSha").textContent = ver ? "v" + ver : "";
       bar.classList.add("on");
       bar.onclick = async () => {
-        bar.textContent = "⏳ กำลังอัปเดต… โปรแกรมจะปิดและเปิดใหม่เอง (มีหน้าต่างอัปเดตเด้งขึ้นมา)";
+	        bar.textContent = tr("⏳ กำลังอัปเดต… โปรแกรมจะปิดและเปิดใหม่เอง (มีหน้าต่างอัปเดตเด้งขึ้นมา)");
         await api("/update", {});
         // If the updater took over, this page is gone before the timer fires.
         // If we're STILL here after 45s, it didn't start — un-stick the banner.
@@ -5404,12 +6387,12 @@
             const h = await fetch("/health");
             if (h && h.ok) {
               bar.classList.add("on");
-              bar.innerHTML = "⚠️ อัปเดตยังไม่เริ่ม — เปิด Terminal แล้วรัน <b>bagidea update</b> (หรือคลิกที่นี่เพื่อลองอีกครั้ง)";
+	              bar.innerHTML = `${tr("⚠️ อัปเดตยังไม่เริ่ม — เปิด Terminal แล้วรัน")} <b>bagidea update</b> ${tr("(หรือคลิกที่นี่เพื่อลองอีกครั้ง)")}`;
             }
           } catch {}
         }, 45000);
       };
-      addFeed("main", "🔄 มีเวอร์ชันใหม่ " + (ver ? "v" + ver : "") + " — อัปเดตได้จากแถบในหน้าแชท หรือ `bagidea update`", "");
+	      addFeed("main", tr("🔄 มีเวอร์ชันใหม่") + " " + (ver ? "v" + ver : "") + " " + tr("— อัปเดตได้จากแถบในหน้าแชท หรือ `bagidea update`"), "");
       return;
     }
     if (ev.type === "ui.daylight") {
@@ -5431,13 +6414,14 @@
     const subId = ev.sub || (ev.agent && String(ev.agent).includes("#") ? ev.agent : null);
     if (subId) return routeSub(ev, subId);
     if (ev.type === "subagent.split") {
-      if (!ev.replay) addLog(`👻 <b>${nameOf(ev.agent)}</b> แตกร่าง ${ev.count} sub-agents → Ghost Deck`);
+	      if (!ev.replay) addLog(`👻 <b>${nameOf(ev.agent)}</b> ${tr("แตกร่าง")} ${ev.count} ${tr("sub-agents → Ghost Deck")}`);
       return;
     }
-    if (ev.agent) ensureAgent(ev.agent);
-    if (ev.agents) ev.agents.forEach((a) => { if (typeof a === "string") ensureAgent(a, "meeting"); });
+    if (ev.agent && isRosterAgent(ev.agent)) ensureAgent(ev.agent);
+    if (ev.agents) ev.agents.forEach((a) => { if (isRosterAgent(a)) ensureAgent(a, "meeting"); });
 
     if (ev.type === "chat.message") {
+      if (!ACTIVITY_FILTER.showThread(ev)) return;
       // The pane is per-conversation: bubble only for the current agent's
       // current thread (or the meeting being watched live); history replays
       // come from /sessions/log instead.
@@ -5445,7 +6429,7 @@
         hideTyping();
         if (ev.isSummary) {
           // Secretary's minutes — render distinctly, prefixed so it reads as a recap.
-          addMsg("agent", ev.agent, "📝\n" + ev.text, ev.ts, "· summary");
+          addMsg("agent summary", ev.agent, "📝\n" + ev.text, ev.ts, "· conclusion");
         } else if (ev.agent === "ceo") {
           addMsg("you", null, ev.text, ev.ts);   // owner spoke into the meeting
         } else {
@@ -5474,15 +6458,23 @@
       }
       if (missions[key]) { missions[key].tool = ev.tool; renderMissions(); }
       ensureAgent(ev.agent, "working");
+      if (mapOpen) renderMapIcons();
     }
     else if (ev.type === "task.started") {
+      if (!ev.replay) {
+        const title = taskTitleVisible(ev.title);
+        if (title) addLog(`▶ <b>${nameOf(ev.agent)}</b> ${String(title).replace(/</g, "&lt;")}`);
+      }
       missions[key] = { agent: ev.agent, state: "running" }; renderMissions();
       ensureAgent(ev.agent, "working");
+      if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) showTyping("🧠", tr("กำลังคิดและวางแผน…"));
     }
     else if (ev.type === "task.completed") {
+      if (!ev.replay) addLog(`<b>${nameOf(ev.agent)}</b> ${tr("✓ งานเสร็จ")}`);
       if (missions[key]) { missions[key].state = "done"; renderMissions(); }
       ensureAgent(ev.agent, "idle");
+      if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) hideTyping();
       // Live context-usage meter for the thread the user is watching.
       if (!ev.replay && ev.usage && ev.agent === sessAgent() && !groupView &&
@@ -5492,8 +6484,13 @@
       if (!ev.replay) refreshBrainsSoon();  // keep the 🧠 BRAINS usage meters current
     }
     else if (ev.type === "task.failed") {
+      if (!ev.replay) {
+        const reason = friendlyFailureReason(ev.reason, ev.runtime);
+        addLog(`✗ <b>${nameOf(ev.agent)}</b> ${reason ? String(reason).replace(/</g, "&lt;") : tr("✗ งานล้มเหลว").replace(/^✗\s*/, "")}`);
+      }
       if (missions[key]) { missions[key].state = "failed"; renderMissions(); }
       ensureAgent(ev.agent, "idle");
+      if (mapOpen) renderMapIcons();
       if (viewingLive(ev)) hideTyping();
     }
     else if (ev.type === "thread.switch") {
@@ -5521,45 +6518,45 @@
       removePermCard(ev.perm);
       if (missions[key]) { missions[key].state = "running"; renderMissions(); }
       ensureAgent(ev.agent, "working");
-      if (!ev.replay) addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? "allowed" : "denied"}</b> (${nameOf(ev.agent)})`);
+	      if (!ev.replay) addLog(`🛡 ${ev.tool} — <b>${ev.type === "perm.approved" ? tr("อนุญาต") : tr("ปฏิเสธ")}</b> (${nameOf(ev.agent)})`);
     }
     else if (ev.type === "ceo.summon") {
       // Direct feedback in the CEO pane (you just gave the order) — log otherwise.
       if (!ev.replay) {
-        addLog(`👑 CEO เรียก <b>${nameOf("main")}</b> เข้ารับคำสั่ง`);
-        if (target === "ceo") addChip(`👑 <b>${nameOf("main")}</b> กำลังเดินมารับคำสั่ง…`);
+	        addLog(`${tr("👑 CEO เรียก")} <b>${nameOf("main")}</b> ${tr("👑 เข้ารับคำสั่งจาก CEO").replace(/^👑\s*/, "")}`);
+	        if (target === "ceo") addChip(`👑 <b>${nameOf("main")}</b> ${tr("เดินมารับคำสั่ง")}…`);
       }
     }
     else if (ev.type === "task.delegated") {
       if (!ev.replay) {
-        addLog(`📋 <b>${nameOf("main")}</b> มอบหมายงานให้ <b>${nameOf(ev.target)}</b>`);
-        if (target === "ceo") addChip(`📋 มอบหมายงานให้ <b>${nameOf(ev.target)}</b>`);
+	        addLog(`📋 <b>${nameOf("main")}</b> ${tr("📋 มอบหมายงานให้").replace(/^📋\s*/, "")} <b>${nameOf(ev.target)}</b>`);
+	        if (target === "ceo") addChip(`${tr("📋 มอบหมายงานให้")} <b>${nameOf(ev.target)}</b>`);
       }
     }
     else if (ev.type === "ceo.report") {
       if (!ev.replay) {
-        addLog(`📨 <b>${nameOf("main")}</b> ส่งสรุปงานให้ CEO`);
-        if (target === "ceo") addChip(`📨 <b>${nameOf("main")}</b> เดินมาส่งสรุปงานแล้ว ↑`);
+	        addLog(`📨 <b>${nameOf("main")}</b> ${tr("📨 ส่งสรุปงานให้ CEO").replace(/^📨\s*/, "")}`);
+	        if (target === "ceo") addChip(`📨 <b>${nameOf("main")}</b> ${tr("เดินมาส่งสรุปงานแล้ว ↑")}`);
       }
     }
     else if (ev.type === "reminder") {
       if (!ev.replay) {
-        addChip(`🔔 <b>เตือนนัด:</b> ${String(ev.text).replace(/</g, "&lt;")} (${new Date(ev.at).toLocaleTimeString()})`);
-        addLog(`🔔 เตือนนัด: <b>${String(ev.text).replace(/</g, "&lt;")}</b>`);
+	        addChip(`<b>${tr("🔔 เตือนนัด:")}</b> ${String(ev.text).replace(/</g, "&lt;")} (${new Date(ev.at).toLocaleTimeString()})`);
+	        addLog(`${tr("🔔 เตือนนัด:")} <b>${String(ev.text).replace(/</g, "&lt;")}</b>`);
         uiSnd("alert");
       }
     }
     else if (ev.type === "job.started") {
-      if (!ev.replay) addLog(`📋 เริ่มงานที่สั่งไว้: <b>${String(ev.title || "").replace(/</g, "&lt;")}</b> — ${nameOf(ev.agent)}`);
+	      if (!ev.replay) addLog(`${tr("📋 เริ่มงานที่สั่งไว้:")} <b>${String(ev.title || "").replace(/</g, "&lt;")}</b> — ${nameOf(ev.agent)}`);
     }
     else if (ev.type === "notes.changed") {
-      if (!ev.replay && ev.by === "agent") addLog(`📝 มี agent เขียนโน้ตบนกระดาน (${ev.count} ข้อ)`);
+	      if (!ev.replay && ev.by === "agent") addLog(`${tr("มี agent เขียนโน้ตบนกระดาน")} (${ev.count} ${tr("ข้อ")})`);
     }
     else if (ev.type === "collab.started") {
-      if (!ev.replay) addLog(`🤝 ประชุมเริ่ม — ${(ev.agents || []).map(nameOf).join(", ")}`);
+	      if (!ev.replay) addLog(`${tr("🤝 ประชุมเริ่ม —")} ${(ev.agents || []).map(nameOf).join(", ")}`);
     }
     else if (ev.type === "collab.ended") {
-      if (!ev.replay) addLog(`🤝 ประชุมจบ`);
+	      if (!ev.replay) addLog(tr("🤝 ประชุมจบ"));
     }
     else if (ev.type === "meeting.live") {
       // A meeting just went live. Track it so the speak bar can show when the
@@ -5578,8 +6575,8 @@
         const dot = document.getElementById("liveDot");
         if (pause) pause.style.display = ev.paused ? "none" : "";
         if (resume) resume.style.display = ev.paused ? "" : "none";
-        if (dot) dot.textContent = ev.paused ? "⏸ พักวงประชุม" : "🔴 LIVE meeting — พิมพ์เข้าวงประชุม";
-        if (ev.ended && dot) dot.textContent = "🏁 กำลังจบ…";
+        if (dot) dot.textContent = ev.paused ? tr("⏸ พักวงประชุม") : tr("🔴 LIVE meeting — พิมพ์เข้าวงประชุม");
+        if (ev.ended && dot) dot.textContent = tr("🏁 กำลังจบ…");
       }
     }
     else if (ev.type === "meeting.resumed") {
@@ -5590,19 +6587,20 @@
         const dot = document.getElementById("liveDot");
         if (pause) pause.style.display = "";
         if (resume) resume.style.display = "none";
-        if (dot) dot.textContent = "🔴 LIVE meeting — พิมพ์เข้าวงประชุม";
+        if (dot) dot.textContent = tr("🔴 LIVE meeting — พิมพ์เข้าวงประชุม");
       }
     }
     else if (ev.type === "meeting.action") {
       // An action item was minted by the summary secretary. Surface it as a
       // chip in the feed (NOT on Mission Control — see ADR-0001).
       if (!ev.replay && ev.action) {
-        addChip(`✅ <b>${nameOf(ev.action.owner)}</b>: ${ev.action.text}` +
-          (ev.action.due ? ` <span style="color:var(--dim)">⏰ ${ev.action.due}</span>` : ""));
+        addChip(`📝 会议跟进项草案 · <b>${nameOf(ev.action.owner)}</b>: ${ev.action.text}` +
+          (ev.action.due ? ` <span style="color:var(--dim)">⏰ ${ev.action.due}</span>` : "") +
+          ` <span style="color:var(--dim)">不会自动创建待办</span>`);
       }
     }
     else if (ev.type === "skill.created") {
-      if (!ev.replay) addLog(`📚 <b>${nameOf(ev.agent)}</b> learned a new skill: <b>${ev.skill}</b>`);
+	      if (!ev.replay) addLog(`${tr("📚 เรียนรู้สกิลใหม่:")} <b>${nameOf(ev.agent)}</b> · <b>${ev.skill}</b>`);
     }
     else if (ev.type === "agent.online") ensureAgent(ev.agent, "idle");
     else if (ev.type === "agent.offline") ensureAgent(ev.agent, "offline");
@@ -5650,7 +6648,7 @@
           PENDING_FILES = PENDING_FILES.filter((x) => x !== j);
           chip.remove();
         };
-        chip.title = "คลิกเพื่อเอาออก";
+        chip.title = tr("คลิกเพื่อเอาออก");
       } catch (e) {
         chip.textContent = "✗ " + f.name;
         setTimeout(() => chip.remove(), 2500);
@@ -5679,7 +6677,7 @@
       _lbEl.appendChild(_lbImg);
       _lbOpen = document.createElement("button");
       _lbOpen.id = "lbOpen";
-      _lbOpen.textContent = "⤢ เปิดในหน้าต่างใหม่";
+      _lbOpen.textContent = "⤢ " + tr("เปิดเป็นหน้าต่างใหม่");
       _lbOpen.onclick = (e) => { e.stopPropagation(); if (_lbPath) openExternal(_lbPath); };
       _lbEl.appendChild(_lbOpen);
       const close = () => { _lbEl.style.display = "none"; _lbImg.src = ""; };
@@ -5719,7 +6717,7 @@
     if (kind === "image") {
       el = document.createElement("img");
       el.src = url; el.loading = "lazy";
-      el.title = "คลิกเพื่อดูภาพ · ปุ่ม ⤢ เปิดเป็นหน้าต่างใหม่";
+      el.title = tr("คลิกเพื่อดูภาพ · ปุ่ม ⤢ เปิดเป็นหน้าต่างใหม่");
       el.onclick = () => openLightbox(url, realPath);
     } else if (kind === "video") {
       el = document.createElement("video");
@@ -5739,12 +6737,12 @@
     wrap.appendChild(el);
     const fb = document.createElement("button");
     fb.className = "revealbtn";
-    fb.title = "เปิดโฟลเดอร์ที่เก็บไฟล์";
+    fb.title = tr("เปิดโฟลเดอร์ที่เก็บไฟล์");
     fb.textContent = "📂";
     fb.onclick = (e) => { e.stopPropagation(); revealInFolder(realPath); };
     const ob = document.createElement("button");
     ob.className = "revealbtn openbtn";
-    ob.title = "เปิดเป็นหน้าต่างใหม่ (โปรแกรมดูไฟล์ของเครื่อง)";
+    ob.title = tr("เปิดเป็นหน้าต่างใหม่ (โปรแกรมดูไฟล์ของเครื่อง)");
     ob.textContent = "⤢";
     ob.onclick = (e) => { e.stopPropagation(); openExternal(realPath); };
     wrap.appendChild(ob);
@@ -5771,13 +6769,13 @@
     document.getElementById("attachRow").innerHTML = "";
     if (!prompt && !files.length) return;
     if (groupView) {
-      addChip("📖 กำลังดูบันทึกย้อนหลัง (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย");
+      addChip(tr("📖 กำลังดูบันทึกย้อนหลัง (อ่านอย่างเดียว) — คลิก agent ใน rail เพื่อกลับไปคุย"));
       return;
     }
     inp.value = "";
     inp.style.height = "auto";  // collapse the grown textarea back to one row
     uiSnd("send");
-    const d = addMsg("you", null, prompt || "(ส่งไฟล์แนบ)");
+    const d = addMsg("you", null, prompt || tr("(ส่งไฟล์แนบ)"));
     for (const f of files) d.appendChild(mediaNode(f.url, f.kind, f.name, f.path || f.url));
     showTyping("⏳", tr("กำลังรับคำสั่ง…"));  // instant feedback while the agent spins up (no more dead silence)
     if (files.length) {
@@ -5786,16 +6784,26 @@
     }
     const session = SESS[target];
     if (session === "new") SESS[target] = undefined;  // next sends continue it
-    await fetch("/chat", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: target, prompt, session,
-        files: files.map((f) => ({ path: f.path, name: f.name, kind: f.kind })) }),
-    });
-    refreshThreadBar();  // a fresh thread exists server-side immediately
+    try {
+      const r = await fetch("/chat", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: target, prompt, session,
+          files: files.map((f) => ({ path: f.path, name: f.name, kind: f.kind })) }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json().catch(() => ({}));
+      if (j.session) { SESS[target] = j.session; CUR[target] = j.session; }
+      refreshThreadBar(true);  // reload the exact persisted thread for this send
+    } catch (e) {
+      hideTyping();
+      addChip("⚠ 发送失败，已保留在当前窗口：" + esc(e && e.message ? e.message : e));
+    }
   }
   document.getElementById("send").onclick = send;
   (function () {
     const box = document.getElementById("inp");
+    const menu = document.getElementById("mentionMenu");
+    let mentionIndex = 0;
     // grow with the message; only show a scrollbar once it hits the cap (so an
     // empty box never has a phantom scrollbar from the placeholder).
     const grow = () => {
@@ -5803,12 +6811,119 @@
       box.style.height = Math.min(box.scrollHeight, 128) + "px";
       box.style.overflowY = box.scrollHeight > 128 ? "auto" : "hidden";
     };
-    box.addEventListener("input", grow);
+    const mentionRange = () => {
+      const pos = box.selectionStart;
+      if (pos == null || pos !== box.selectionEnd) return null;
+      const before = box.value.slice(0, pos);
+      const at = before.lastIndexOf("@");
+      if (at < 0) return null;
+      if (at > 0 && !/\s/.test(before[at - 1])) return null;
+      const raw = before.slice(at + 1);
+      if (/\s|:|：|@/.test(raw)) return null;
+      return { start: at, end: pos, query: raw.toLowerCase() };
+    };
+    const mentionChoices = (query) => staffIds()
+      .map((id) => ({ id, name: nameOf(id), role: roleOf(id), runtimeTag: mentionRuntimeTag(id) }))
+      .filter((a) => {
+        const q = String(query || "").toLowerCase();
+        return !q || a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q);
+      })
+      .slice(0, 8);
+    const placeMentionMenu = () => {
+      const r = box.getBoundingClientRect();
+      const top = Math.max(8, r.top - menu.offsetHeight - 8);
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = top + "px";
+    };
+    const closeMentionMenu = () => {
+      menu.classList.remove("open");
+      menu.innerHTML = "";
+    };
+    const pickMention = (choice) => {
+      const range = mentionRange();
+      if (!range || !choice) return closeMentionMenu();
+      const token = mentionTokenFor(choice.id);
+      box.value = box.value.slice(0, range.start) + "@" + token + " " + box.value.slice(range.end);
+      const pos = range.start + token.length + 2;
+      box.selectionStart = box.selectionEnd = pos;
+      closeMentionMenu();
+      grow();
+      box.focus();
+    };
+    const renderMentionMenu = () => {
+      const range = mentionRange();
+      if (!range) return closeMentionMenu();
+      const choices = mentionChoices(range.query);
+      if (!choices.length) return closeMentionMenu();
+      mentionIndex = Math.max(0, Math.min(mentionIndex, choices.length - 1));
+      menu.innerHTML = choices.map((a, i) =>
+        `<div class="opt${i === mentionIndex ? " active" : ""}" data-id="${esc(a.id)}">
+          <span class="face"></span><span><b>${esc(a.name)}</b><small>@${esc(a.id)} · ${esc(a.role)}</small></span>
+          <span class="mrun">${esc(a.runtimeTag)}</span>
+        </div>`).join("");
+      menu.querySelectorAll(".opt").forEach((o) => {
+        const id = o.dataset.id;
+        const f = o.querySelector(".face");
+        face(f, id, 28);
+        o.onmouseenter = () => {
+          mentionIndex = choices.findIndex((a) => a.id === id);
+          menu.querySelectorAll(".opt").forEach((x, ix) => x.classList.toggle("active", ix === mentionIndex));
+        };
+        o.onmousedown = (e) => { e.preventDefault(); pickMention(choices.find((a) => a.id === id)); };
+      });
+      menu.classList.add("open");
+      placeMentionMenu();
+    };
+    let mentionFilling = false;
+    box.addEventListener("input", (e) => {
+      if (!mentionFilling && box.value === "@" && e.inputType === "insertText" && e.data === "@") {
+        const token = mentionDefaultToken();
+        if (token) {
+          mentionFilling = true;
+          box.value = "@" + token + " ";
+          box.selectionStart = box.selectionEnd = box.value.length;
+          mentionFilling = false;
+        }
+      }
+      grow();
+      mentionIndex = 0;
+      renderMentionMenu();
+    });
     grow();  // lock the correct one-row height up front
     box.addEventListener("keydown", (e) => {
+      if (menu.classList.contains("open")) {
+        const choices = mentionChoices((mentionRange() || {}).query);
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          mentionIndex = (mentionIndex + 1) % Math.max(1, choices.length);
+          renderMentionMenu();
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          mentionIndex = (mentionIndex - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length);
+          renderMentionMenu();
+          return;
+        }
+        if (e.key === "Tab" || e.key === "Enter") {
+          if (choices[mentionIndex]) {
+            e.preventDefault();
+            pickMention(choices[mentionIndex]);
+            return;
+          }
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeMentionMenu();
+          return;
+        }
+      }
       // Enter sends; Shift+Enter inserts a newline (like every modern chat).
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
     });
+    box.addEventListener("click", renderMentionMenu);
+    box.addEventListener("blur", () => setTimeout(closeMentionMenu, 120));
+    window.addEventListener("resize", () => { if (menu.classList.contains("open")) placeMentionMenu(); });
   })();
   // Top-bar popups (menus, modals, the map…) live where the sidebar slides
   // in — opening any of them tucks the panel away first.
@@ -5822,31 +6937,17 @@
   const shellPost = window.ipc && window.ipc.postMessage
     ? (m) => window.ipc.postMessage(m) : null;
   if (shellPost) {
+    document.documentElement.classList.add("native-window");
     document.getElementById("titlebar").addEventListener("mousedown", (e) => {
       if (e.button === 0 && !e.target.closest("button") && !e.target.closest(".winbtn"))
         shellPost("drag-overlay");
     });
-    const miniBtn = document.getElementById("miniBtn");
-    miniBtn.onclick = () => shellPost("mini");
     document.getElementById("hideBtn").onclick = () => shellPost("hide");
-    // The ◱/⛶ glyphs DON'T render on Windows 10 (no font coverage) — the restore
-    // button showed up EMPTY there, so people couldn't find their way back from mini.
-    // Use inline SVG icons (identical everywhere). State via the same media query the
-    // mini-mode CSS uses: ICON_MINI when full (action: shrink), ICON_RESTORE when mini.
-    const ICON_MINI = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1.6"/><rect x="2.5" y="9" width="6" height="4.5" rx="1" fill="currentColor" stroke="none"/></svg>';
-    const ICON_RESTORE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.3H3.3V6M10 3.3h2.7V6M6 12.7H3.3V10M10 12.7h2.7V10"/></svg>';
-    const syncMiniBtn = () => {
-      const small = _miniMQ.matches;   // mini window is ≤480px wide / ≤460px tall
-      miniBtn.innerHTML = small ? ICON_RESTORE : ICON_MINI;
-      miniBtn.title = small ? "Restore window size" : "Mini window";
+    window.setFullscreenMode = (on) => {
+      document.body.classList.toggle("fullscreen", !!on);
     };
-    syncMiniBtn();
-    requestAnimationFrame(syncMiniBtn);          // re-read once layout settles
-    window.addEventListener("resize", syncMiniBtn);
-    _miniMQ.addEventListener("change", syncMiniBtn);   // fires exactly on mini⇄full
   } else {
     // plain browser: the OS window has its own chrome
-    document.getElementById("miniBtn").style.display = "none";
     document.getElementById("hideBtn").style.display = "none";
     document.body.style.borderRadius = "0";
     document.body.style.border = "none";

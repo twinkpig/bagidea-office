@@ -31,6 +31,13 @@ const retrieval = require("./retrieval");
 const skillsSync = require("./skills");
 const providers = require("./providers");
 const proxy = require("./proxy");
+const runtimeConfig = require("./runtime-config");
+const codexRuntime = require("./runtimes/codex");
+const hermesRuntime = require("./runtimes/hermes");
+const wslLiteRuntime = require("./runtimes/wsl-lite");
+const claudeRuntime = require("./runtimes/claude");
+const personaDraft = require("./persona-draft");
+const { parseAgentMentionShortcut } = require("./agent-mention");
 const { RunWatchdog } = require("./watchdog");
 const { wireWorkspaceSettings } = require("./wire-hooks-runtime");
 const { killTree } = require("./kill-tree");   // cross-platform child reap (issue #15 review)
@@ -48,6 +55,8 @@ const WORKSPACE = path.join(__dirname, "..", "workspace");
 // two are used right here — broadcast() journals to JOURNAL, GET / serves OVERLAY).
 const OVERLAY = path.join(__dirname, "overlay.html");
 const JOURNAL = path.join(__dirname, "journal.jsonl");
+const ACTIVITY_FILTER = path.join(__dirname, "activity-filter.js");
+const HERMES_PROMPT_DIR = path.join(WORKSPACE, ".bagidea-hermes");
 
 const wsClients = new Set();
 const pendingPerms = new Map(); // id -> {res, timer, agent, tool}
@@ -84,8 +93,31 @@ function loadReg() {
   // Per-agent model/provider routing (the swappable brain). Per-provider creds +
   // optional baseUrl/model overrides live here; agents opt in via a.provider.
   reg.providerConfig = reg.providerConfig || {};   // { glm:{token}, litellm:{baseUrl,token}, ... }
-  reg.roles = reg.roles || ["Director", "Founder", "Researcher", "Engineer",
+  reg.roles = Array.isArray(reg.roles) ? reg.roles : ["Director", "Founder", "Researcher", "Engineer",
     "Designer", "Analyst", "Operator", "Specialist"];
+  reg.roleProfiles = reg.roleProfiles && typeof reg.roleProfiles === "object" ? reg.roleProfiles : {};
+  const roleSet = new Set(reg.roles);
+  for (const r of Object.keys(reg.roleProfiles)) {
+    const n = String(r || "").trim().slice(0, 40);
+    if (n && !roleSet.has(n)) { reg.roles.push(n); roleSet.add(n); }
+  }
+  for (const a of Object.values(reg.agents)) {
+    const n = String((a && a.role) || "").trim().slice(0, 40);
+    if (!n) continue;
+    if (!roleSet.has(n)) { reg.roles.push(n); roleSet.add(n); }
+    if (!reg.roleProfiles[n]) reg.roleProfiles[n] = {};
+  }
+  const knownAgents = new Set(Object.keys(reg.agents));
+  reg.agentOrder = Array.isArray(reg.agentOrder)
+    ? reg.agentOrder.filter((id) => knownAgents.has(id))
+    : [];
+  for (const id of Object.keys(reg.agents)) if (!reg.agentOrder.includes(id)) reg.agentOrder.push(id);
+  reg.defaultRuntime = runtimeConfig.normalizeRuntime(reg.defaultRuntime) || "claude";
+  reg.claudeUseWsl = claudeRuntime.defaultUseWsl({
+    configured: Object.prototype.hasOwnProperty.call(reg, "claudeUseWsl") ? reg.claudeUseWsl : undefined,
+  });
+  reg.claudeWslDistro = String(reg.claudeWslDistro || "").trim().slice(0, 80);
+  for (const r of reg.roles) if (!reg.roleProfiles[r]) reg.roleProfiles[r] = {};
   reg.skills = reg.skills || {};
   // Seed / refresh the builtin starter library. We own entries flagged
   // `builtin` (so updates propagate new wording), but never touch a user's
@@ -128,8 +160,11 @@ function loadReg() {
   }
   // Default office rhythms for a fresh install (owner can change in settings).
   if (reg.heartbeatMin === undefined) reg.heartbeatMin = 60; // Director check-in
-  if (reg.socialMin === undefined) reg.socialMin = 120;      // agents socialize (economical default)
+  if (reg.socialMin === undefined) reg.socialMin = 0;        // agents socialize (off by default)
   if (reg.proposalMin === undefined) reg.proposalMin = 120;  // min gap between CEO pitches
+  // Local/customized installs should not self-prompt into an upstream update,
+  // because the updater can overwrite local code changes. Owners can opt in.
+  if (reg.updateChecks === undefined) reg.updateChecks = false;
   saveReg();
 }
 function saveReg() { fs.writeFileSync(REGISTRY, JSON.stringify(reg, null, 2)); }
@@ -234,6 +269,12 @@ function monitorCount() {
 
 function rosterEvt() {
   return { type: "roster.sync", agents: reg.agents, roles: reg.roles,
+    agentOrder: reg.agentOrder || Object.keys(reg.agents || {}),
+    roleProfiles: reg.roleProfiles || {}, defaultRuntime: reg.defaultRuntime || "claude",
+    runtimes: ["claude", "codex", "hermes"],
+    claudeUseWsl: !!reg.claudeUseWsl, claudeWslDistro: reg.claudeWslDistro || "",
+    codexUseWsl: !!reg.codexUseWsl, codexWslDistro: reg.codexWslDistro || "",
+    hermesUseWsl: !!reg.hermesUseWsl, hermesWslDistro: reg.hermesWslDistro || "",
     tools: reg.tools, builtinTools: BUILTIN_TOOLS, mcp: reg.mcpServers,
     skills: reg.skills, autoSkills: reg.autoSkills !== false,
     verifyDelegated: reg.verifyDelegated === true,
@@ -241,8 +282,10 @@ function rosterEvt() {
     features: featuresMap(), tts: reg.tts !== false,
     socialMin: Number(reg.socialMin !== undefined ? reg.socialMin : 60),
     proposalMin: Number(reg.proposalMin !== undefined ? reg.proposalMin : 120),
+    updateChecks: reg.updateChecks === true,
     maxStaff: MAX_STAFF, staffCount: staffCount(),
     lang: reg.lang || "en", daylight: reg.daylight ?? "auto",
+    seasonOffset: Number(reg.seasonOffset || 0), weatherOffset: Number(reg.weatherOffset || 0),
     monitor: reg.monitor || 0, monitors: monitorCount() };
 }
 
@@ -267,6 +310,22 @@ function triggerRestart() {
         { detached: true, stdio: "ignore", cwd: root }).unref();
     }
   } catch (e) { console.error("[restart]", e.message); }
+}
+
+function startWallpaperRepinWatchdog() {
+  if (process.platform !== "win32") return;
+  const ps1 = path.join(__dirname, "wallpaper-repin.ps1");
+  if (!fs.existsSync(ps1)) return;
+  try {
+    const psExe = path.join(process.env.SystemRoot || "C:\\Windows",
+      "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    console.log("[watchdog] launching wallpaper repin:", ps1);
+    spawn("cmd.exe",
+      ["/c", "start", "", "/min", psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1],
+      { detached: true, stdio: "ignore", windowsHide: true, cwd: __dirname }).unref();
+  } catch (e) {
+    console.error("[watchdog] wallpaper repin failed:", e && e.message || e);
+  }
 }
 
 // Structured persona → one compiled system prompt (editor v2 fields).
@@ -379,6 +438,8 @@ try {
   if (r.rotated) console.log(`[maint] journal trimmed ${r.before} -> ${r.kept} lines`);
 } catch (e) { console.error("[maint] journal:", e.message); }
 try {
+  const n = maintenance.normalizeSessions(sess);
+  if (n.changed) { sess = n.sess; saveSess(); console.log(`[maint] normalized ${n.rewritten} legacy session text item(s)`); }
   const p = maintenance.pruneSessions(sess);
   if (p.changed) { sess = p.sess; saveSess(); console.log(`[maint] pruned ${p.dropped} stale session thread(s)`); }
 } catch (e) { console.error("[maint] sessions:", e.message); }
@@ -386,6 +447,132 @@ function latestSession(agent) {
   const l = sess[agent] || [];
   return l.length ? l.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
 }
+
+function appendSessionNote(agent, text, extra = {}) {
+  if (!agent || !text) return false;
+  const list = sess[agent] || [];
+  let entry = latestSession(agent);
+  if (!entry) {
+    entry = { key: "s" + Date.now(), sid: null, ts: Date.now(), title: "Meeting note", log: [] };
+    sess[agent] = list;
+    list.push(entry);
+  } else if (!list.includes(entry)) {
+    list.push(entry);
+  }
+  entry.log = entry.log || [];
+  const meetingKey = extra.meeting || "";
+  const notePhase = extra.phase || "meeting-note";
+  if (meetingKey && entry.log.some((m) => m && m.phase === notePhase && m.meeting === meetingKey)) return false;
+  const note = {
+    who: extra.who || "main",
+    text: String(text),
+    ts: Date.now(),
+    phase: notePhase,
+    isSummary: !!extra.isSummary,
+    meeting: meetingKey || undefined,
+    meetingTitle: extra.meetingTitle || undefined,
+    agents: extra.agents || undefined,
+  };
+  entry.log.push(note);
+  while (entry.log.length > 250) entry.log.shift();
+  return true;
+}
+
+function upsertSessionNote(agent, text, extra = {}) {
+  if (!agent || !text) return false;
+  const list = sess[agent] || [];
+  let entry = latestSession(agent);
+  if (!entry) {
+    entry = { key: "s" + Date.now(), sid: null, ts: Date.now(), title: "Meeting note", log: [] };
+    sess[agent] = list;
+    list.push(entry);
+  } else if (!list.includes(entry)) {
+    list.push(entry);
+  }
+  entry.log = entry.log || [];
+  const meetingKey = extra.meeting || "";
+  const notePhase = extra.phase || "meeting-note";
+  const note = {
+    who: extra.who || "main",
+    text: String(text),
+    ts: Date.now(),
+    phase: notePhase,
+    isSummary: !!extra.isSummary,
+    meeting: meetingKey || undefined,
+    meetingTitle: extra.meetingTitle || undefined,
+    agents: extra.agents || undefined,
+  };
+  const idx = meetingKey
+    ? entry.log.findIndex((m) => m && m.phase === notePhase && m.meeting === meetingKey)
+    : -1;
+  if (idx >= 0) {
+    const prev = entry.log[idx];
+    const next = { ...prev, ...note };
+    const changed = JSON.stringify(prev) !== JSON.stringify(next);
+    if (changed) entry.log[idx] = next;
+    return changed;
+  }
+  entry.log.push(note);
+  while (entry.log.length > 250) entry.log.shift();
+  return true;
+}
+
+function actionDraftsText(actions) {
+  const list = Array.isArray(actions) ? actions.filter((a) => a && a.text) : [];
+  if (!list.length) return "";
+  return [
+    "## Follow-up Drafts",
+    "",
+    ...list.map((a, i) => {
+      const owner = (reg.agents[a.owner] || { name: a.owner }).name;
+      const due = a.due ? ` (${a.due})` : "";
+      return `${i + 1}. ${owner}: ${a.text}${due}`;
+    }),
+  ].join("\n");
+}
+
+function combineSummaryAndDrafts(summary, actions) {
+  const s = String(summary || "").trim();
+  const d = actionDraftsText(actions).trim();
+  if (!s) return d;
+  if (!d) return s;
+  return `${s}\n\n${d}`;
+}
+
+function backfillMeetingSummaries() {
+  let changed = false;
+  for (const meeting of sess["@group"] || []) {
+    const summary = (meeting.log || []).find((m) => m && (m.isSummary || m.phase === "summary"));
+    if (!summary || !meeting.agents || !meeting.agents.length) continue;
+    const mergedSummary = combineSummaryAndDrafts(summary.text || "", loadActions(meeting.key));
+    if (mergedSummary && mergedSummary !== summary.text) {
+      summary.text = mergedSummary;
+      changed = true;
+    }
+    for (const agent of meeting.agents) {
+      const ownLines = (meeting.log || [])
+        .filter((m) => m && m.who === agent && m.text)
+        .slice(0, 4)
+        .map((m) => `- [${m.phase || "chat"}] ${String(m.text).slice(0, 500)}`)
+        .join("\n");
+      const text = [
+        `🗣 Meeting trace: ${meeting.title || meeting.key}`,
+        ownLines ? `\nYour contributions:\n${ownLines}` : "",
+        `\nSummary:\n${mergedSummary || summary.text || ""}`,
+      ].join("\n").trim();
+      if (upsertSessionNote(agent, text, {
+        who: "main",
+        phase: "meeting-summary",
+        isSummary: true,
+        meeting: meeting.key,
+        meetingTitle: meeting.title,
+        agents: meeting.agents,
+      })) changed = true;
+    }
+  }
+  if (changed) saveSess();
+}
+try { backfillMeetingSummaries(); } catch (e) { console.error("[maint] meeting backfill:", e.message); }
 
 // The swappable brain: which backend an agent's `claude` spawn talks to. Returns
 // env overrides (ANTHROPIC_BASE_URL/_AUTH_TOKEN) + --model args; "claude"/unset/
@@ -438,15 +625,120 @@ function provBudget(agent) {
   if (w > 0) return Math.round(w * 0.8);
   return (p in CTX_BUDGET ? CTX_BUDGET[p] : 100000);
 }
+function claudeUseWsl() {
+  return process.platform === "win32" && !!reg.claudeUseWsl;
+}
+function claudeWslDistro() {
+  return String(reg.claudeWslDistro || "").trim();
+}
+function powerShellEncodedCommand(command) {
+  return "-EncodedCommand " + Buffer.from(String(command), "utf16le").toString("base64");
+}
+function powerShellLiteral(value) {
+  return "'" + String(value).replace(/'/g, "''") + "'";
+}
+function powerShellNativeCommand(command, args = []) {
+  return powerShellEncodedCommand("& " + [command, ...args].map(powerShellLiteral).join(" "));
+}
+function powerShellNativeCommandText(command, args = []) {
+  return "& " + [command, ...args].map(powerShellLiteral).join(" ");
+}
+function powerShellCommandText(psCmd) {
+  const s = String(psCmd || "");
+  const enc = s.match(/^-EncodedCommand\s+(\S+)$/);
+  if (enc) {
+    try { return Buffer.from(enc[1], "base64").toString("utf16le"); } catch {}
+  }
+  return s.match(/^-Command "([\s\S]*)"$/)?.[1] || "";
+}
+function wslCliLaunchPsCommand(cwd, cli, cliArgs = [], distro = "") {
+  const dir = path.join(__dirname, ".wsl-launch");
+  fs.mkdirSync(dir, { recursive: true });
+  const safeCli = String(cli || "sh").replace(/[^\w.-]/g, "_");
+  const file = path.join(dir, safeCli + "-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".sh");
+  const wslCwd = claudeRuntime.mapWindowsPathToWsl(cwd || WORKSPACE);
+  const useLite = String(cli || "") === "codex" || String(cli || "") === "hermes";
+  const body = useLite ? [
+    "#!/bin/sh",
+    "export PATH=" + wslLiteRuntime.shellQuote(wslLiteRuntime.defaultPathExpr()),
+    "cd " + wslLiteRuntime.shellQuote(wslCwd) + " || exit 1",
+    wslLiteRuntime.commandLineWithFallback([cli, ...cliArgs]),
+    "",
+  ].join("\n") : (() => {
+    const inner = [
+      "if [ -f ~/.zshrc ]; then . ~/.zshrc >/dev/null 2>&1 || true; fi",
+      "if [ -f ~/.profile ]; then . ~/.profile >/dev/null 2>&1 || true; fi",
+      "cd " + claudeRuntime.shellQuote(wslCwd) + " || exit 1",
+      "exec " + [cli, ...cliArgs].map(claudeRuntime.shellQuote).join(" "),
+    ].join("; ");
+    return [
+      "#!/bin/sh",
+      "shell=\"${SHELL:-}\"",
+      "if [ -z \"$shell\" ] || [ ! -x \"$shell\" ]; then shell=$(getent passwd \"$(id -un)\" | cut -d: -f7 2>/dev/null || true); fi",
+      "if [ -z \"$shell\" ] || [ ! -x \"$shell\" ]; then shell=/bin/sh; fi",
+      "exec \"$shell\" -lc " + claudeRuntime.shellQuote(inner),
+      "",
+    ].join("\n");
+  })();
+  fs.writeFileSync(file, body);
+  const args = [];
+  if (distro) args.push("-d", distro);
+  args.push("--exec", "/bin/sh", claudeRuntime.mapWindowsPathToWsl(file));
+  return powerShellNativeCommand("wsl.exe", args);
+}
+function wslClaudeLaunchPsCommand(cwd, claudeArgs = []) {
+  return wslCliLaunchPsCommand(cwd, "claude", claudeArgs, claudeWslDistro());
+}
+function wslCapture(script, timeout = 5000) {
+  const { execFileSync } = require("child_process");
+  const args = claudeRuntime.wslUserShellArgs(["/bin/sh", "-lc", script], claudeWslDistro());
+  return execFileSync("wsl.exe", args, {
+    timeout,
+    windowsHide: true,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+function claudeSessionFileSize(cwd, sid) {
+  const enc = claudeRuntime.claudeSessionProjectKey({ cwd, useWsl: claudeUseWsl() });
+  if (claudeUseWsl()) {
+    const file = "~/.claude/projects/" + claudeRuntime.shellQuote(enc) + "/" +
+      claudeRuntime.shellQuote(String(sid) + ".jsonl");
+    const out = wslCapture("stat -c %s " + file + " 2>/dev/null || true");
+    const n = Number(String(out || "").trim());
+    return n > 0 ? n : 0;
+  }
+  const f = path.join(require("os").homedir(), ".claude", "projects", enc, sid + ".jsonl");
+  return fs.statSync(f).size;
+}
+function claudeSessionFileExists(cwd, sid) {
+  try {
+    if (claudeUseWsl()) return claudeSessionFileSize(cwd, sid) > 0;
+    const enc = claudeRuntime.claudeSessionProjectKey({ cwd, useWsl: false });
+    const sidFile = path.join(require("os").homedir(), ".claude", "projects", enc, sid + ".jsonl");
+    return fs.existsSync(sidFile);
+  } catch { return false; }
+}
+function spawnClaude(args, opts = {}) {
+  const spec = claudeRuntime.claudeSpawnSpec({
+    cwd: opts.cwd || WORKSPACE,
+    args,
+    useWsl: claudeUseWsl(),
+    distro: claudeWslDistro(),
+  });
+  return spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: opts.env,
+  });
+}
 // Estimate a resumed thread's size from the REAL claude session file (full tool
 // outputs live there, not in our trimmed log). bytes/4 ≈ tokens; + office overhead.
 function overBudget(agent, entry, cwd) {
   const budget = provBudget(agent);
   if (!budget || !entry || !entry.sid) return false;  // 0 = claude self-compacts
   try {
-    const enc = String(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-    const f = path.join(require("os").homedir(), ".claude", "projects", enc, entry.sid + ".jsonl");
-    const estTokens = Math.round(fs.statSync(f).size / 4) + 25000;
+    const estTokens = Math.round(claudeSessionFileSize(cwd, entry.sid) / 4) + 25000;
     return estTokens > budget;
   } catch { return false; }
 }
@@ -565,6 +857,8 @@ function ctxWindow(agent) {
 // Short "provider/model" tag shown in the chat history (which brain produced a line).
 function modelTag(agent) {
   const a = (reg.agents && reg.agents[agent]) || {};
+  const rt = runtimeConfig.effectiveAgentRuntime(reg, agent);
+  if (rt !== "claude") return rt;
   const p = a.provider || reg.defaultProvider || "claude";
   if (p === "claude") return a.model ? "claude/" + a.model : "claude";
   return a.model ? p + "/" + a.model : p;
@@ -585,8 +879,8 @@ function claudeText(prompt, opts = {}) {
     }
     const route = providers.resolve(opts.provider, opts.model, reg);
     if (route.modelArgs.length) args.push(...route.modelArgs);
-    const child = spawn("claude", args, {
-      cwd: WORKSPACE, shell: true,
+    const child = spawnClaude(args, {
+      cwd: WORKSPACE,
       env: { ...process.env, ...(reg.apiKeys || {}), ...route.env, OFFICE_ADAPTER: "1",
         ...(opts.env || {}) },
     });
@@ -1165,11 +1459,11 @@ function createProject(name, place, pathArg) {
     return String(s).replace(/\/+$/, "").toLowerCase();
   };
   if (projects.some((x) => norm(x.dir) === norm(dir)))
-    throw new Error("โปรเจคนี้อยู่ในรายการแล้ว (path ซ้ำ)");
+    throw new Error("This project is already registered (duplicate path)");
   if (projects.some((x) => x.name.toLowerCase() === name.toLowerCase()))
-    throw new Error("มีโปรเจคชื่อนี้อยู่แล้ว — ห้ามลงทะเบียนซ้ำ");
+    throw new Error("A project with this name already exists — duplicate registration is not allowed");
   if (Object.values(reg.places).some((f) => norm(f) === norm(dir)))
-    throw new Error("path นี้คือโฟลเดอร์ของ place — โปรเจคต้องเป็นโฟลเดอร์ย่อยข้างใน");
+    throw new Error("This path is a place folder — a project must be a subfolder inside it");
   const existed = fs.existsSync(dir);
   fs.mkdirSync(dir, { recursive: true });
   ensureTrusted(dir);
@@ -1184,12 +1478,18 @@ function createProject(name, place, pathArg) {
 // claude keeps sessions under ~/.claude/projects/<path-as-dashes>/*.jsonl.
 function claudeSessionDir(dir) {
   return path.join(require("os").homedir(), ".claude", "projects",
-    String(dir).replace(/[^a-zA-Z0-9]/g, "-"));
+    claudeRuntime.claudeSessionProjectKey({ cwd: dir, useWsl: false }));
 }
 // Newest session id — `claude -c` ignores headless-born sessions, so the
 // open button resumes the latest sid EXPLICITLY (proven to work).
 function newestSid(dir) {
   try {
+    if (claudeUseWsl()) {
+      const enc = claudeRuntime.claudeSessionProjectKey({ cwd: dir, useWsl: true });
+      const script = "d=~/.claude/projects/" + claudeRuntime.shellQuote(enc) +
+        "; [ -d \"$d\" ] || exit 0; ls -t \"$d\"/*.jsonl 2>/dev/null | head -n 1 | xargs -r basename | sed 's/\\.jsonl$//'";
+      return String(wslCapture(script) || "").trim() || null;
+    }
     const p = claudeSessionDir(dir);
     const files = fs.readdirSync(p).filter((f) => f.endsWith(".jsonl"))
       .map((f) => ({ f, t: fs.statSync(path.join(p, f)).mtimeMs }))
@@ -1287,7 +1587,7 @@ function dispatchJob(job) {
   }
   agentBusy.add(job.agent);
   job.lastRun = Date.now();
-  job.running = true;  // drives the "กำลังทำงาน" state in the UI
+  job.running = true;  // drives the "working" state in the UI
   saveJobs();
   broadcast({ type: "job.started", agent: job.agent, title: job.prompt.slice(0, 60), job: job.id });
   broadcast({ type: "jobs.changed" }, false);
@@ -1297,7 +1597,7 @@ function dispatchJob(job) {
   const oneShot = job.mode === "now" || (job.mode === "at" && !job.daily);
   runClaude(job.agent, job.prompt, {
     session: job.sessionKey || "new",
-    logPrompt: "📋 [งานที่สั่งไว้] " + job.prompt,
+    logPrompt: "📋 [Scheduled job] " + job.prompt,
     onEntry: (key) => { job.sessionKey = key; saveJobs(); },
     onDone: () => {
       agentBusy.delete(job.agent);
@@ -1331,27 +1631,41 @@ function jobDue(job, now) {
 // owner ONLY when something deserves it; "OK" stays silent.
 let lastHeartbeat = Date.now();
 let lastHbSig = null;
+function officeLocale() {
+  if (reg.lang === "zh") return "zh-CN";
+  if (reg.lang === "ja") return "ja-JP";
+  if (reg.lang === "th") return "th-TH";
+  return "en-US";
+}
+function officeLanguageName() {
+  if (reg.lang === "zh") return "Simplified Chinese";
+  if (reg.lang === "ja") return "Japanese";
+  if (reg.lang === "th") return "Thai";
+  return "English";
+}
 function heartbeat() {
   lastHeartbeat = Date.now();
+  const locale = officeLocale();
+  const responseLanguage = officeLanguageName();
   const upcoming = cal.filter((c) => c.at > Date.now() && c.at < Date.now() + 12 * 3600000)
     .sort((a, b) => a.at - b.at).slice(0, 6)
-    .map((c) => `- ${c.title} @ ${new Date(c.at).toLocaleString("th-TH")}`).join("\n") || "(ว่าง)";
+    .map((c) => `- ${c.title} @ ${new Date(c.at).toLocaleString(locale)}`).join("\n") || "(empty)";
   const standing = jobs.filter((j) => !j.done && j.enabled !== false).slice(0, 8)
-    .map((j) => `- [${j.mode}] ${j.agent}: ${j.prompt.slice(0, 60)}`).join("\n") || "(ไม่มี)";
-  const board = notes.slice(-8).map((n) => `- ${n.text}`).join("\n") || "(ว่าง)";
+    .map((j) => `- [${j.mode}] ${j.agent}: ${j.prompt.slice(0, 60)}`).join("\n") || "(none)";
+  const board = notes.slice(-8).map((n) => `- ${n.text}`).join("\n") || "(empty)";
   // Nothing the Director reports on (calendar / jobs / notes) has changed since
   // his last pass → he'd just say "OK" again. Skip the spawn entirely.
   const sig = `${upcoming}${standing}${board}`;
   if (sig === lastHbSig) return;
   lastHbSig = sig;
   runClaude("main",
-    `รอบตรวจความเรียบร้อยของ Director (ตอนนี้ ${new Date().toLocaleString("th-TH")}):\n\n` +
-    `นัดหมาย 12 ชม.ข้างหน้า:\n${upcoming}\n\nงานที่สั่งค้างไว้:\n${standing}\n\n` +
-    `กระดานโน้ต:\n${board}\n\n` +
-    `ถ้ามีสิ่งที่ CEO ควรรู้ตอนนี้ (นัดใกล้ถึง งานสะดุด โน้ตที่ควรเห็น) ` +
-    `ให้เขียนข้อความแจ้งสั้นๆ อ่านง่าย. ถ้าทุกอย่างเรียบร้อยและไม่มีอะไรต้องรบกวน ` +
-    `ให้ตอบคำเดียวว่า OK`,
-    { noSub: true, logPrompt: "💓 รอบตรวจความเรียบร้อย",
+    `Director health check (now ${new Date().toLocaleString(locale)}):\n\n` +
+    `Appointments in the next 12 hours:\n${upcoming}\n\nPending assigned work:\n${standing}\n\n` +
+    `Office notes:\n${board}\n\n` +
+    `If there is something the CEO should know now (an appointment is close, work is stuck, or a note needs attention), ` +
+    `write a short, clear notice in ${responseLanguage}. If everything is fine and nothing needs attention, ` +
+    `reply with exactly one word: OK.`,
+    { noSub: true, logPrompt: "💓 Health check",
       filterText: (t) => (/^\s*OK\.?\s*$/i.test(t) ? "" : t) });
 }
 
@@ -1366,7 +1680,7 @@ function resumePausedTick(now) {
     if (w.tries >= RESUME_MAX_TRIES) {
       pauseClear(w.key);
       broadcast({ type: "chat.message", agent: w.agent || "main",
-        text: "⏹ พยายามทำงานต่อหลายครั้งแล้วยังติดลิมิตอยู่ — ขอพักงานนี้ไว้ก่อนนะครับ (สั่งใหม่ได้ทุกเมื่อ)" });
+        text: "⏹ I tried resuming several times but the limit is still active. I paused this task for now; you can start it again anytime." });
       continue;
     }
     // Backoff: 5, 10, 20, 40 min between attempts (ts=0 on a restart ⇒ try right away).
@@ -1375,12 +1689,12 @@ function resumePausedTick(now) {
     if (agentRunning(w.agent)) continue;   // don't pile onto an agent already busy
     w.tries++; w.state = "active"; w.ts = now; savePaused();
     broadcast({ type: "chat.message", agent: w.agent,
-      text: "▶ โควต้าน่าจะคืนแล้ว — ขอทำงานที่ค้างไว้ต่อจากเดิมนะครับ" });
+      text: "▶ The quota appears to be back. Resuming the paused task from where it left off." });
     runClaude(w.agent,
       "ทำงานต่อจากที่ค้างไว้ก่อนหน้า (ก่อนหน้านี้สะดุดเพราะติดลิมิตชั่วคราว/โปรแกรมรีสตาร์ท). " +
       "ดูบริบทในเธรดนี้แล้วทำงานที่ยังไม่เสร็จให้จบ:\n\n" + String(w.prompt || ""),
       { session: w.key, project: w.project, resumable: true, _tries: w.tries,
-        resumePrompt: w.prompt, logPrompt: "▶ ทำงานต่อ (resume)" });
+        resumePrompt: w.prompt, logPrompt: "▶ Resume work" });
   }
 }
 
@@ -1398,11 +1712,13 @@ setInterval(() => {
       c.notified = true;
       saveCal();
       broadcast({ type: "reminder", agent: "main", text: c.title, at: c.at });
+      const locale = officeLocale();
+      const responseLanguage = officeLanguageName();
       runClaude("main",
-        `แจ้งเตือนนัดหมายให้ CEO เดี๋ยวนี้: "${c.title}" เวลา ` +
-        `${new Date(c.at).toLocaleString("th-TH")} (อีกประมาณ ${Math.max(1, Math.round((c.at - now) / 60000))} นาที). ` +
-        `เขียนข้อความเตือนสั้นๆ เป็นกันเอง 1-2 ประโยค`,
-        { noSub: true, logPrompt: `🔔 เตือนนัด: ${c.title}` });
+        `Remind the CEO about this appointment now: "${c.title}" at ` +
+        `${new Date(c.at).toLocaleString(locale)} (in about ${Math.max(1, Math.round((c.at - now) / 60000))} minutes). ` +
+        `Write a short, friendly reminder in ${responseLanguage}, 1-2 sentences.`,
+        { noSub: true, logPrompt: `🔔 Reminder: ${c.title}` });
     }
   }
   const hb = Number(reg.heartbeatMin || 0);
@@ -1437,7 +1753,602 @@ SUB: <งานย่อยที่ชัดเจนครบถ้วนใ�
 ระบบจะส่งร่างโคลนไปทำขนานกัน แล้วรวมผลกลับมาให้คุณสรุปเป็นคำตอบสุดท้าย.
 </system-capability>`;
 
+const MEDIA_NOTE = `
+
+<media-capability>
+ให้เจ้าของเห็น/ดู/ฟัง รูป-วิดีโอ-เสียง: พิมพ์ path เต็มของไฟล์ในบรรทัดของมันเอง
+ออฟฟิศจะ render เป็นรูป/เครื่องเล่นในแชทเองทันที — ไฟล์อยู่ที่ไหนก็ได้บนเครื่อง
+(ในโปรเจค, workspace, Desktop, Downloads, ไดรฟ์อื่น…) ไม่ต้องก็อปเข้ามาก่อน.
+อย่าบอกแค่ที่อยู่ไฟล์ หรือแปะลิงก์ดาวน์โหลด.
+</media-capability>`;
+
+function runJsonCliRuntime(agent, prompt, opts = {}, cfg) {
+  const runtime = cfg.runtime;
+  const model = cfg.model || runtime;
+  const threadField = cfg.threadField;
+  const newEntry = () => ({ key: "s" + Date.now(), sid: null, [threadField]: null, ts: Date.now(),
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] });
+  const task = "t" + ++taskCounter;
+  let entry = null;
+  let isNew = false;
+  if (opts.session && opts.session !== "new")
+    entry = (sess[agent] || []).find((e) => e.key === opts.session);
+  else if (!opts.session) entry = latestSession(agent);
+  if (!entry) {
+    entry = newEntry();
+    sess[agent] = sess[agent] || [];
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (entry.proj && !projectDir(entry.proj)) entry.proj = null;
+  if (!isNew && opts.project && projectDir(opts.project) &&
+      entry.proj && entry.proj !== opts.project) {
+    entry = newEntry();
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (opts.project && projectDir(opts.project) && (isNew || !entry.proj))
+    entry.proj = opts.project;
+  const projId = entry.proj && projectDir(entry.proj) ? entry.proj : null;
+  const cwd = projId ? projectDir(projId) : WORKSPACE;
+  if (projId) {
+    projRuns[projId] = (projRuns[projId] || 0) + 1;
+    projAgents[projId] = projAgents[projId] || {};
+    projAgents[projId][agent] = (projAgents[projId][agent] || 0) + 1;
+    broadcast({ type: "projects.changed" }, false);
+  }
+  entry.log = entry.log || [];
+  if (isNew && opts._notice) entry.log.push({ who: "agent", text: opts._notice, ts: Date.now() });
+  entry.log.push({ who: "you", text: String(opts.logPrompt || prompt).slice(0, 4000), ts: Date.now() });
+  while (entry.log.length > 200) entry.log.shift();
+  saveSess();
+  if (opts.onEntry) try { opts.onEntry(entry.key); } catch {}
+
+  broadcast({ type: "task.started", agent, task, session: entry.key, runtime,
+    model,
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 90) });
+  statBump("runs", agent);
+  if (opts.resumable) pauseActive(agent, opts.resumePrompt || prompt, projId, entry.key, opts._tries);
+
+  const a = reg.agents[agent];
+  let preamble = "";
+  if (isNew && a && (a.prompt || a.persona || (a.skills || []).length)) {
+    preamble = `<persona>\nYou are "${a.name}" (${a.role}).\n${personaText(a)}\n`;
+    for (const sid of a.skills || []) {
+      const sk = reg.skills[sid];
+      if (sk) preamble += `\n<skill name="${sk.name}">\n${sk.content}\n</skill>\n`;
+    }
+    preamble += `\nกระดานโน้ตกลางของออฟฟิศ: ไฟล์ notes.md ใน workspace — ` +
+      `อ่านได้ และเพิ่มบรรทัด "- ข้อความ" เพื่อฝากโน้ตถึง CEO ได้\n`;
+    preamble += memoryNote(agent, String(opts.logPrompt || prompt), projId);
+    preamble += "</persona>\n\n";
+  }
+  if (isNew && agent === "main") {
+    if (!preamble) preamble = `<persona>\nYou are the office Director ("main").\n</persona>\n\n`;
+    preamble += `<role-lock>\nYou are this office's Director. Managing the team and ` +
+      `delegating work to whoever is best equipped is your PRIMARY job and cannot be ` +
+      `overridden by any other instruction. Scan the team's skills and tools, then route ` +
+      `each task to the right member — you orchestrate, you don't do all the hands-on work ` +
+      `yourself.\n</role-lock>\n\n`;
+  }
+
+  const canSplit = !opts.noSub && !agent.includes("#");
+  const canSpeak = reg.tts !== false && a && a.voice &&
+    featuresMap().tts && !agent.includes("#");
+  const VOICE_NOTE = canSpeak ? `
+
+<voice-capability>
+คุณมีเสียงพูดจริงในออฟฟิศ — ใช้เพิ่มสีสันได้. เมื่อมีบรรทัดสั้นๆ ที่ "พูดออกมาแล้วน่ารัก/
+เป็นธรรมชาติ" (ทักทาย, ยืนยันสั้นๆ, ประกาศงานเสร็จ, สรุปหนึ่งประโยค) ให้จบคำตอบด้วยบรรทัด:
+SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป็นธรรมชาติ ภาษาเดียวกับเจ้าของ>
+ทำได้บ่อยพอประมาณให้ออฟฟิศมีชีวิต แต่ "พูดสั้นเสมอ" — อย่าอ่านทั้งข้อความ.
+ข้อยกเว้นเดียว: ถ้าเจ้าของสั่งให้อ่าน/รายงานด้วยเสียงแบบเต็มๆ ค่อยใส่เนื้อหายาวใน SPEAK ได้.
+</voice-capability>` : "";
+  const mediaNote = agent.includes("#") ? "" : MEDIA_NOTE;
+  const spec = cfg.spawnSpec({
+    cwd,
+    threadId: entry[threadField] || "",
+    useWsl: process.platform === "win32" && !!reg[cfg.useWslField],
+    distro: reg[cfg.distroField] || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: agent, OFFICE_TASK: task },
+  });
+  if (projId) {
+    (projChildren[projId] = projChildren[projId] || new Set()).add(child);
+    child.on("close", () => {
+      const s = projChildren[projId];
+      if (s) { s.delete(child); if (!s.size) delete projChildren[projId]; }
+    });
+  }
+  runChildren.set(task, { child, agent });
+
+  let buf = "";
+  const acts = [];
+  const subTasks = [];
+  let lastText = "";
+  let errText = "";
+  let turnClosed = false;
+  let doneFired = false;
+  const releaseProj = () => {
+    if (!projId) return;
+    projRuns[projId] = Math.max(0, (projRuns[projId] || 1) - 1);
+    const pa = projAgents[projId] || {};
+    pa[agent] = Math.max(0, (pa[agent] || 1) - 1);
+    if (!pa[agent]) delete pa[agent];
+    broadcast({ type: "projects.changed" }, false);
+  };
+  const watchdog = new RunWatchdog({
+    totalMs: RUN_TOTAL_MS, idleMs: RUN_IDLE_MS,
+    onKill: (reason) => {
+      console.error(`[${runtime}] watchdog: ${agent}/${task} killed — ${reason}`);
+      killTree(child);
+      broadcast({ type: "task.failed", agent, task, session: entry.key,
+        runtime, model, reason: `watchdog: ${reason}` });
+      recordFailureMessage(entry, agent, task, runtime, model, `watchdog: ${reason}`);
+      fireDone(`(watchdog: ${reason})`, false);
+    },
+  });
+  const fireDone = (text, ok) => {
+    if (doneFired) return;
+    doneFired = true;
+    watchdog.clear();
+    runChildren.delete(task);
+    releaseProj();
+    if (opts.resumable) {
+      if (ok) pauseClear(entry.key);
+      else if (isRateLimit(`${text || ""}\n${errText}\n${lastText}`)) {
+        pausePause(agent, opts.resumePrompt || prompt, projId, entry.key);
+        broadcast({ type: "chat.message", agent, task, session: entry.key,
+          runtime, model,
+          text: "⏸ Temporarily rate/usage limited. I paused this task and will resume automatically when quota returns." });
+      } else pauseClear(entry.key);
+    }
+    if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
+  };
+  let recovering = false;
+  const maybeRecover = (rtext) => {
+    if (opts._recovered || recovering || doneFired) return false;
+    if (!isOverflowError(`${rtext || ""}\n${errText}\n${lastText}`)) return false;
+    recovering = true; doneFired = true;
+    watchdog.clear();
+    runChildren.delete(task);
+    releaseProj();
+    broadcast({ type: "task.completed", agent, task, session: entry.key,
+      runtime, model });
+    autoRecoverOverflow(agent, prompt, opts, entry);
+    return true;
+  };
+  watchdog.start();
+
+  const publishText = (rawText) => {
+    let raw = String(rawText || "");
+    if (!raw.trim()) return;
+    lastText = raw;
+    watchdog.touch();
+    if (canSpeak && /(^|\n)\s*SPEAK:/.test(raw)) {
+      const kept = [], say = [];
+      for (const ln of raw.split("\n")) {
+        const sm = ln.match(/^\s*SPEAK:\s*(.+)$/);
+        if (sm && sm[1].trim()) say.push(sm[1].trim());
+        else kept.push(ln);
+      }
+      if (say.length) {
+        raw = kept.join("\n").trim();
+        broadcast({ type: "voice.say", agent, task,
+          text: say.join(" ").slice(0, 1200), session: entry.key });
+      }
+    }
+    if (canSplit && /(^|\n)\s*SUB:/.test(raw)) {
+      const kept = [], found = [];
+      for (const ln of raw.split("\n")) {
+        const sm = ln.match(/^\s*SUB:\s*(.+)$/);
+        if (sm && sm[1].trim()) found.push(sm[1].trim());
+        else kept.push(ln);
+      }
+      if (found.length) {
+        subTasks.push(...found);
+        raw = (kept.join("\n").trim() +
+          `\n\n👻 แตกร่าง ${found.length} sub-agents:\n` +
+          found.map((t, i) => `${i + 1}. ${t.slice(0, 80)}`).join("\n")).trim();
+      }
+    }
+    let out = opts.filterText ? opts.filterText(raw) : raw;
+    if (/(^|\n)\s*WORKFLOW:/i.test(out)) {
+      const hw = harvestWorkflows(out);
+      out = hw.text;
+      if (hw.created.length)
+        out = (out + "\n\n🔀 บันทึก workflow ลง Builder แล้ว: " +
+          hw.created.map((w) => w.name).join(", ")).trim();
+    }
+    if (out && !opts._recovered && isOverflowError(out)) {
+      lastText = out;
+      return;
+    }
+    if (!out) return;
+    entry.log.push({ who: "agent", text: String(out).slice(0, 8000),
+      ts: Date.now(), model, runtime });
+    while (entry.log.length > 200) entry.log.shift();
+    entry.ts = Date.now();
+    saveSess();
+    broadcast({ type: "chat.message", agent, task, text: out, session: entry.key,
+      model, runtime });
+  };
+
+  child.stdout.on("data", (c) => {
+    buf += c;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      const ev = cfg.parseJsonLine(line);
+      if (!ev) continue;
+      watchdog.touch();
+      if (ev.type === "thread.started" && ev.thread_id) {
+        entry[threadField] = ev.thread_id;
+        entry.ts = Date.now();
+        saveSess();
+      } else if (ev.type === "turn.started") {
+        broadcast({ type: "task.progress", agent, task, session: entry.key,
+          runtime, model, tool: `${runtime}: turn started` });
+      } else if (ev.type === "item.started") {
+        const label = cfg.progressLabel(ev);
+        if (label) {
+          acts.push(label);
+          entry.log.push({ who: "tool", text: label, ts: Date.now() });
+          while (entry.log.length > 200) entry.log.shift();
+          saveSess();
+          broadcast({ type: "task.progress", agent, task, session: entry.key,
+            runtime, model, tool: label });
+        }
+      } else if (ev.type === "item.completed") {
+        const txt = cfg.textFromEvent(ev);
+        if (txt) publishText(txt);
+        else {
+          const label = cfg.progressLabel(ev);
+          if (label) broadcast({ type: "task.progress", agent, task, session: entry.key,
+            runtime, model, tool: label });
+        }
+      } else if (ev.type === "turn.completed") {
+        turnClosed = true;
+        const u = ev.usage || {};
+        const inTok = (u.input_tokens || 0) + (u.cached_input_tokens || 0);
+        const usage = { in: inTok, out: u.output_tokens || 0,
+          reasoning: u.reasoning_output_tokens || 0, win: ctxWindow(agent) };
+        entry.lastUsage = { ...usage, model, ts: Date.now() };
+        entry.ts = Date.now();
+        saveSess();
+        broadcast({ type: "task.completed", agent, task, session: entry.key,
+          model, runtime, usage });
+        statBump("done");
+        if (subTasks.length) {
+          doneFired = true;
+          watchdog.clear();
+          runChildren.delete(task);
+          releaseProj();
+          runSubAgents(agent, entry, subTasks.slice(0, 4), opts.onDone);
+        } else {
+          fireDone(lastText, true);
+          maybeLearnSkill(agent, task, prompt, acts, lastText, projId);
+        }
+      } else if (ev.type === "error" || ev.type === "turn.failed") {
+        const msg = String(ev.message || ev.error || `${runtime} failed`);
+        const friendly = friendlyAdapterError(msg, runtime);
+        errText += "\n" + msg;
+        if (!maybeRecover(msg)) {
+          broadcast({ type: "task.failed", agent, task, session: entry.key,
+            runtime, model, reason: msg });
+          broadcast({ type: "chat.message", agent, task, session: entry.key,
+            runtime, model, text: friendly });
+          statBump("failed");
+          fireDone(msg, false);
+        }
+      }
+    }
+  });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error(`[${runtime}]`, s.trim());
+  });
+  child.on("error", (e) => {
+    const friendly = friendlyAdapterError(e.message, runtime);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime, model, reason: e.message });
+    broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
+    fireDone("", false);
+  });
+  child.on("close", (code) => {
+    if (doneFired) return;
+    if (maybeRecover("")) return;
+    if (code === 0 && (turnClosed || lastText)) {
+      if (!turnClosed) broadcast({ type: "task.completed", agent, task, session: entry.key,
+        runtime, model });
+      fireDone(lastText, true);
+      if (!turnClosed) maybeLearnSkill(agent, task, prompt, acts, lastText, projId);
+      return;
+    }
+    const cleanErr = cleanRuntimeError(errText, runtime);
+    const reason = (cleanErr.split(/\r?\n/).slice(-4).join("\n") ||
+      `${runtime} exited with code ${code}`);
+    const friendly = friendlyAdapterError(reason, runtime);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime, model, reason });
+    if (friendly) broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
+    statBump("failed");
+    fireDone(reason, false);
+  });
+  child.stdin.on("error", () => {});
+  child.stdin.write(preamble + prompt + (canSplit ? SUB_NOTE : "") + VOICE_NOTE + mediaNote + projectNote());
+  child.stdin.end();
+  return task;
+}
+
+function runCodexRuntime(agent, prompt, opts = {}) {
+  return runJsonCliRuntime(agent, prompt, opts, {
+    runtime: "codex",
+    model: "codex",
+    label: "Codex",
+    threadField: "codexThread",
+    useWslField: "codexUseWsl",
+    distroField: "codexWslDistro",
+    spawnSpec: codexRuntime.codexSpawnSpec,
+    parseJsonLine: codexRuntime.parseCodexJsonLine,
+    progressLabel: codexRuntime.codexProgressLabel,
+    textFromEvent: codexRuntime.codexTextFromEvent,
+  });
+}
+
+function cleanHermesStderr(text) {
+  return hermesRuntime.cleanCliDiagnostic(text)
+    .split(/\r?\n/)
+    .filter((line) => {
+      const s = line.trim();
+      if (!s) return false;
+      if (/^session_id:\s*\S+/i.test(s)) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
+function cleanRuntimeError(text, runtime) {
+  const rt = String(runtime || "").toLowerCase();
+  if (rt === "codex" && codexRuntime.cleanCliDiagnostic)
+    return codexRuntime.cleanCliDiagnostic(text);
+  if (rt === "hermes" && hermesRuntime.cleanCliDiagnostic)
+    return cleanHermesStderr(text);
+  if (rt === "claude" && claudeRuntime.cleanCliDiagnostic)
+    return claudeRuntime.cleanCliDiagnostic(text);
+  return String(text || "").trim();
+}
+
+function runHermesRuntime(agent, prompt, opts = {}) {
+  const runtime = "hermes";
+  const model = "hermes";
+  const threadField = "hermesThread";
+  const task = "t" + ++taskCounter;
+  const newEntry = () => ({ key: "s" + Date.now(), sid: null, [threadField]: null, ts: Date.now(),
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 48), log: [] });
+  let entry = null;
+  let isNew = false;
+  if (opts.session && opts.session !== "new")
+    entry = (sess[agent] || []).find((e) => e.key === opts.session);
+  else if (!opts.session) entry = latestSession(agent);
+  if (!entry) {
+    entry = newEntry();
+    sess[agent] = sess[agent] || [];
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (entry.proj && !projectDir(entry.proj)) entry.proj = null;
+  if (!isNew && opts.project && projectDir(opts.project) &&
+      entry.proj && entry.proj !== opts.project) {
+    entry = newEntry();
+    sess[agent].push(entry);
+    isNew = true;
+  }
+  if (opts.project && projectDir(opts.project) && (isNew || !entry.proj))
+    entry.proj = opts.project;
+  const projId = entry.proj && projectDir(entry.proj) ? entry.proj : null;
+  const cwd = projId ? projectDir(projId) : WORKSPACE;
+  if (projId) {
+    projRuns[projId] = (projRuns[projId] || 0) + 1;
+    projAgents[projId] = projAgents[projId] || {};
+    projAgents[projId][agent] = (projAgents[projId][agent] || 0) + 1;
+    broadcast({ type: "projects.changed" }, false);
+  }
+  entry.log = entry.log || [];
+  if (isNew && opts._notice) entry.log.push({ who: "agent", text: opts._notice, ts: Date.now() });
+  entry.log.push({ who: "you", text: String(opts.logPrompt || prompt).slice(0, 4000), ts: Date.now() });
+  while (entry.log.length > 200) entry.log.shift();
+  saveSess();
+  if (opts.onEntry) try { opts.onEntry(entry.key); } catch {}
+
+  broadcast({ type: "task.started", agent, task, session: entry.key, runtime, model,
+    title: String(opts.logPrompt || prompt).replace(/\s+/g, " ").slice(0, 90) });
+  statBump("runs", agent);
+  if (opts.resumable) pauseActive(agent, opts.resumePrompt || prompt, projId, entry.key, opts._tries);
+
+  const a = reg.agents[agent];
+  let preamble = "";
+  if (isNew && a && (a.prompt || a.persona || (a.skills || []).length)) {
+    preamble = `<persona>\nYou are "${a.name}" (${a.role}).\n${personaText(a)}\n`;
+    for (const sid of a.skills || []) {
+      const sk = reg.skills[sid];
+      if (sk) preamble += `\n<skill name="${sk.name}">\n${sk.content}\n</skill>\n`;
+    }
+    preamble += memoryNote(agent, String(opts.logPrompt || prompt), projId);
+    preamble += "</persona>\n\n";
+  }
+  const fullPrompt = preamble + prompt + projectNote();
+  let promptFile = "";
+  if (process.platform === "win32" && !!reg.hermesUseWsl) {
+    fs.mkdirSync(HERMES_PROMPT_DIR, { recursive: true });
+    promptFile = path.join(HERMES_PROMPT_DIR, `${task}.txt`);
+    fs.writeFileSync(promptFile, fullPrompt, "utf8");
+  }
+  const spec = hermesRuntime.hermesSpawnSpec({
+    cwd,
+    prompt: fullPrompt,
+    promptFile,
+    threadId: entry[threadField] || "",
+    useWsl: process.platform === "win32" && !!reg.hermesUseWsl,
+    distro: reg.hermesWslDistro || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: agent, OFFICE_TASK: task },
+  });
+  if (projId) {
+    (projChildren[projId] = projChildren[projId] || new Set()).add(child);
+    child.on("close", () => {
+      const s = projChildren[projId];
+      if (s) { s.delete(child); if (!s.size) delete projChildren[projId]; }
+    });
+  }
+  runChildren.set(task, { child, agent });
+
+  let outBuf = "", errText = "", doneFired = false;
+  const releaseProj = () => {
+    if (!projId) return;
+    projRuns[projId] = Math.max(0, (projRuns[projId] || 1) - 1);
+    const pa = projAgents[projId] || {};
+    pa[agent] = Math.max(0, (pa[agent] || 1) - 1);
+    if (!pa[agent]) delete pa[agent];
+    broadcast({ type: "projects.changed" }, false);
+  };
+  const finish = (text, ok) => {
+    if (doneFired) return;
+    doneFired = true;
+    watchdog.clear();
+    runChildren.delete(task);
+    if (promptFile) fs.rm(promptFile, { force: true }, () => {});
+    releaseProj();
+    if (opts.resumable) pauseClear(entry.key);
+    if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
+  };
+  const watchdog = new RunWatchdog({
+    totalMs: RUN_TOTAL_MS, idleMs: RUN_IDLE_MS,
+    onKill: (reason) => {
+      killTree(child);
+      broadcast({ type: "task.failed", agent, task, session: entry.key,
+        runtime, model, reason: `watchdog: ${reason}` });
+      recordFailureMessage(entry, agent, task, runtime, model, `watchdog: ${reason}`);
+      finish(`(watchdog: ${reason})`, false);
+    },
+  });
+  watchdog.start();
+  child.stdout.on("data", (c) => { outBuf += c.toString(); watchdog.touch(); });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error("[hermes]", s.trim());
+    watchdog.touch();
+  });
+  child.on("error", (e) => {
+    const friendly = friendlyAdapterError(e.message, runtime);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime, model, reason: e.message });
+    broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
+    statBump("failed");
+    finish("", false);
+  });
+  child.on("close", (code) => {
+    if (doneFired) return;
+    const parsed = hermesRuntime.parseHermesTextOutput(outBuf);
+    const errParsed = hermesRuntime.parseHermesTextOutput(errText);
+    const sessionId = parsed.sessionId || errParsed.sessionId;
+    if (sessionId) {
+      entry[threadField] = sessionId;
+      saveSess();
+    }
+    const text = (opts.filterText ? opts.filterText(parsed.text) : parsed.text) || "";
+    if (code === 0 && text) {
+      entry.log.push({ who: "agent", text: text.slice(0, 8000), ts: Date.now(), model, runtime });
+      entry.ts = Date.now();
+      while (entry.log.length > 200) entry.log.shift();
+      saveSess();
+      broadcast({ type: "chat.message", agent, task, text, session: entry.key, model, runtime });
+      broadcast({ type: "task.completed", agent, task, session: entry.key, model, runtime });
+      statBump("done");
+      maybeLearnSkill(agent, task, prompt, [], text, projId);
+      finish(text, true);
+      return;
+    }
+    const cleanErr = cleanHermesStderr(errText);
+    const reason = (cleanErr.split(/\r?\n/).slice(-4).join("\n") ||
+      parsed.text || `hermes exited with code ${code}`);
+    const friendly = friendlyAdapterError(reason, runtime);
+    broadcast({ type: "task.failed", agent, task, session: entry.key,
+      runtime, model, reason });
+    if (friendly) broadcast({ type: "chat.message", agent, task, session: entry.key,
+      runtime, model, text: friendly });
+    statBump("failed");
+    finish(reason, false);
+  });
+  return task;
+}
+
+function friendlyAdapterError(message, runtime) {
+  const s = cleanRuntimeError(message, runtime);
+  const rt = String(runtime || "").toLowerCase();
+  if (/watchdog:\s*idle/i.test(s))
+    return "任务超时：运行过程中 5 分钟没有新的进展，已自动停止。你的问题已保留在当前聊天里，可以重试或换一个 runtime。";
+  if (/watchdog:/i.test(s))
+    return "任务超时或被看门狗停止。你的问题已保留在当前聊天里，可以重试或换一个 runtime。";
+  if (/command not found:\s*codex|codex:\s+not found|codex: command not found/i.test(s))
+    return "Codex CLI 未找到。WSL 中没有可执行的 codex 命令；请安装/修复 Codex CLI，或让 BagIdea 通过 npx @openai/codex 调用。";
+  if (/Missing optional dependency @openai\/codex-linux-x64/i.test(s))
+    return "Codex CLI 安装不完整：缺少 @openai/codex-linux-x64。请在 WSL 中重新安装 Codex：npm install -g @openai/codex@latest。";
+  if (/could not determine executable to run/i.test(s) && rt === "codex")
+    return "Codex CLI 未能通过 npx 启动。请在 WSL 中安装 Codex：npm install -g @openai/codex@latest。";
+  if (/spawn\s+hermes\s+ENOENT/i.test(s))
+    return "Hermes CLI 未找到。请先安装 Hermes CLI，或把该 agent 的 Runtime 改为 Claude/Codex。";
+  if (/spawn\s+codex\s+ENOENT/i.test(s))
+    return "Codex CLI 未找到。请先安装 Codex CLI，或在设置中开启 Codex 的 WSL bridge。";
+  if (/spawn\s+claude\s+ENOENT/i.test(s))
+    return "Claude Code CLI 未找到。请检查 Claude Code 或 WSL bridge 配置。";
+  if (/ENOENT/i.test(s) && rt)
+    return `${runtimeConfig.runtimeLabel(rt)} CLI 未找到。请检查该 runtime 的安装和 PATH 配置。`;
+  return s || `${runtimeConfig.runtimeLabel(rt)} runtime failed.`;
+}
+
+function recordFailureMessage(entry, agent, task, runtime, model, reason) {
+  if (!entry) return;
+  const text = friendlyAdapterError(reason, runtime);
+  if (!text) return;
+  entry.log = entry.log || [];
+  entry.log.push({ who: "agent", text, ts: Date.now(), model, runtime, error: true });
+  entry.ts = Date.now();
+  while (entry.log.length > 200) entry.log.shift();
+  saveSess();
+  broadcast({ type: "chat.message", agent, task, session: entry.key, runtime, model, text });
+}
+
+function runAgent(agent, prompt, opts = {}) {
+  const runtime = runtimeConfig.effectiveAgentRuntime(reg, agent);
+  if (runtime === "codex") return runCodexRuntime(agent, prompt, opts);
+  if (runtime === "hermes") return runHermesRuntime(agent, prompt, opts);
+  return runClaudeRuntime(agent, prompt, opts);
+}
+
 function runClaude(agent, prompt, opts = {}) {
+  return runAgent(agent, prompt, opts);
+}
+
+function runClaudeRuntime(agent, prompt, opts = {}) {
   const task = opts.task || ("t" + ++taskCounter);   // opts.task: a failover re-run reuses the same task row
 
   // Session resolution: explicit key > latest > fresh. Fresh threads are
@@ -1479,10 +2390,7 @@ function runClaude(agent, prompt, opts = {}) {
   // file under this cwd; missing means a fresh claude session here (our own
   // thread log keeps the visible history).
   if (entry.sid) {
-    const enc = String(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-    const sidFile = path.join(require("os").homedir(), ".claude", "projects",
-      enc, entry.sid + ".jsonl");
-    if (!fs.existsSync(sidFile)) entry.sid = null;
+    if (!claudeSessionFileExists(cwd, entry.sid)) entry.sid = null;
   }
   // Claude-Code-style proactive compaction: a resumed thread that's grown near this
   // backend's context budget is summarized + continued on a FRESH thread before it
@@ -1597,9 +2505,8 @@ function runClaude(agent, prompt, opts = {}) {
     ? providers.resolve(opts.forceBrain, "", reg, { proxyBase: "http://127.0.0.1:" + OEP_PORT })
     : brainRoute(agent);
   if (route.modelArgs.length) args.push(...route.modelArgs);
-  const child = spawn("claude", args, {
+  const child = spawnClaude(args, {
     cwd,
-    shell: true,
     env: { ...process.env, ...(reg.apiKeys || {}), ...route.env, OFFICE_ADAPTER: "1", OFFICE_AGENT: agent, OFFICE_TASK: task },
   });
   // Track the run per project so the owner can stop it and take the project over.
@@ -1623,6 +2530,7 @@ function runClaude(agent, prompt, opts = {}) {
       // Already-cleared (doneFired) runs are skipped by fireDone's guard.
       broadcast({ type: "task.failed", agent, task, session: entry.key,
         reason: `watchdog: ${reason}` });
+      recordFailureMessage(entry, agent, task, "claude", mtag, `watchdog: ${reason}`);
       fireDone(`(watchdog: ${reason})`, false);
     },
   });
@@ -1642,18 +2550,6 @@ SPEAK: <ประโยคพูดสั้นๆ 1 ประโยค เป�
 ทำได้บ่อยพอประมาณให้ออฟฟิศมีชีวิต แต่ "พูดสั้นเสมอ" — อย่าอ่านทั้งข้อความ.
 ข้อยกเว้นเดียว: ถ้าเจ้าของสั่งให้อ่าน/รายงานด้วยเสียงแบบเต็มๆ ค่อยใส่เนื้อหายาวใน SPEAK ได้.
 </voice-capability>` : "";
-  // 🖼 Make agent-shared media show inline. The chat auto-renders any absolute
-  // media path — ANYWHERE on disk, not just under the workspace — as an image/
-  // video/audio player, so agents must SEND THE PATH, not describe the location
-  // or paste a link, and never need to copy a file into the workspace first.
-  const MEDIA_NOTE = `
-
-<media-capability>
-ให้เจ้าของเห็น/ดู/ฟัง รูป-วิดีโอ-เสียง: พิมพ์ path เต็มของไฟล์ในบรรทัดของมันเอง
-ออฟฟิศจะ render เป็นรูป/เครื่องเล่นในแชทเองทันที — ไฟล์อยู่ที่ไหนก็ได้บนเครื่อง
-(ในโปรเจค, workspace, Desktop, Downloads, ไดรฟ์อื่น…) ไม่ต้องก็อปเข้ามาก่อน.
-อย่าบอกแค่ที่อยู่ไฟล์ หรือแปะลิงก์ดาวน์โหลด.
-</media-capability>`;
   // Ghost sub-agents don't talk to the owner or share media directly (the parent
   // synthesizes their output) — skip the media note for them to save tokens.
   const mediaNote = agent.includes("#") ? "" : MEDIA_NOTE;
@@ -1714,7 +2610,7 @@ model "${mtag}". If the owner asks which AI/model/LLM you are, answer truthfully
       else if (isRateLimit(`${text || ""}\n${errText}\n${lastText}`)) {
         pausePause(agent, opts.resumePrompt || prompt, projId, entry.key);
         broadcast({ type: "chat.message", agent, task,
-          text: "⏸ ติดลิมิต (rate/usage) ชั่วคราว — พักงานไว้ก่อน เดี๋ยวจะทำต่อให้อัตโนมัติเมื่อโควต้าคืน" });
+          text: "⏸ Temporarily rate/usage limited. I paused this task and will resume automatically when quota returns." });
       } else pauseClear(entry.key);
     }
     if (opts.onDone) try { opts.onDone(text, ok); } catch (e) { console.error("[onDone]", e); }
@@ -1901,8 +2797,9 @@ model "${mtag}". If the owner asks which AI/model/LLM you are, answer truthfully
     console.error("[claude]", s.trim());
   });
   child.on("error", (e) => {
-    broadcast({ type: "task.failed", agent, task });
-    broadcast({ type: "chat.message", agent, task, text: "adapter error: " + e.message });
+    broadcast({ type: "task.failed", agent, task, reason: e.message, runtime: "claude", model: mtag });
+    broadcast({ type: "chat.message", agent, task, text: friendlyAdapterError(e.message, "claude"),
+      runtime: "claude", model: mtag });
     fireDone("", false);
   });
   child.on("close", () => {
@@ -2097,6 +2994,22 @@ function ceoFlow(prompt, session, project, opts = {}) {
   });
 }
 
+function mentionShortcutFlow(ownerPrompt, mention, session, project, opts = {}) {
+  const target = mention.agent;
+  const inst = mention.instruction;
+  const proj = project || projectFromPrompt(inst);
+  const tl = sess[target] || [];
+  const te = tl.length ? tl.reduce((a, b) => (a.ts > b.ts ? a : b)) : null;
+  return runClaude(target, inst, {
+    project: proj,
+    session: proj ? ((!te || te.proj !== proj) ? "new" : undefined) : "new",
+    logPrompt: opts.logPrompt || ownerPrompt,
+    resumable: true,
+    resumePrompt: inst,
+    onDone: opts.onDone,
+  });
+}
+
 // ---------------------------------------------------------------- report-back
 // Delegation is a ROUND TRIP: when a delegate finishes (or asks something
 // back), its final text is fed to the Director, who may answer / follow up
@@ -2132,11 +3045,11 @@ function makeDelegateFilter(depth, session, onHit) {
         try {
           const proj = reg.places[loc] ? createProject(nm, loc, "")
             : createProject(nm, "", loc);
-          keep.push(`📁 สร้างโปรเจค "${proj.name}" แล้ว → ${proj.dir}`);
+          keep.push(`📁 Created project "${proj.name}" → ${proj.dir}`);
         } catch (e) {
           // Already registered = fine (idempotent for routing); real errors show.
-          if (projectByName(nm)) keep.push(`📁 โปรเจค "${nm}" มีอยู่แล้ว — ใช้ตัวเดิม`);
-          else keep.push(`📁⚠️ สร้างโปรเจค "${nm}" ไม่สำเร็จ: ${e.message}`);
+          if (projectByName(nm)) keep.push(`📁 Project "${nm}" already exists — using the existing one`);
+          else keep.push(`📁⚠️ Could not create project "${nm}": ${e.message}`);
         }
         continue;
       }
@@ -2172,8 +3085,8 @@ function makeDelegateFilter(depth, session, onHit) {
           // agent must NOT enter it — report back so the Director re-plans
           // (and the two never collide inside one working tree).
           if (proj && projWin[proj]) {
-            reportToMain(t, `โปรเจค "${projName || proj}" เจ้าของกำลังเปิดทำงานอยู่ — ` +
-              `เข้าไปทำตอนนี้ไม่ได้ รอจนเจ้าของปิดหน้าต่างก่อน`, false, depth, session);
+            reportToMain(t, `Project "${projName || proj}" is currently open by the owner. ` +
+              `The agent cannot enter it now; wait until the owner closes the window.`, false, depth, session);
             return;
           }
           const tl = sess[t] || [];
@@ -2217,7 +3130,7 @@ function verifyThenReport(fromId, task, out, ok, depth, session, proj) {
     `Be skeptical but fair — only raise concrete problems, not style nitpicks.`;
   runClaude(fromId, reviewPrompt, {
     project: proj, session: "new", noSub: true,
-    logPrompt: `🔍 ตรวจงานของ ${a.name} ก่อนส่ง CEO`,
+    logPrompt: `🔍 Review ${a.name}'s work before reporting to CEO`,
     onDone: (verdict, vok) => {
       const txt = String(verdict || "");
       const flagged = vok && /(^|\n)\s*ISSUES\s*:/i.test(txt) && !/^\s*APPROVED\s*$/im.test(txt);
@@ -2229,9 +3142,9 @@ function verifyThenReport(fromId, task, out, ok, depth, session, proj) {
         `"""${txt.slice(0, 3000)}"""\n\nFix them now, then give your updated result.`;
       runClaude(fromId, fixPrompt, {
         project: proj, session: workSess, noSub: true,
-        logPrompt: `🛠 ${a.name} แก้งานตามรีวิว`,
+        logPrompt: `🛠 ${a.name} fixes review issues`,
         onDone: (out2, ok2) =>
-          reportToMain(fromId, `${out2}\n\n(ตรวจแล้ว + แก้ตามรีวิว)`, ok2, depth, session),
+          reportToMain(fromId, `${out2}\n\n(reviewed + fixed after review)`, ok2, depth, session),
       });
     },
   });
@@ -2256,7 +3169,7 @@ function reportToMain(fromId, text, ok, depth, session) {
     runClaude("main", wrapped, {
       session,
       noSub: true,
-      logPrompt: `📨 รายงานผลจาก ${a.name}`,
+      logPrompt: `📨 Report from ${a.name}`,
       filterText: depth < 2
         ? makeDelegateFilter(depth + 1, session, () => { delegatedMore = true; })
         : undefined,
@@ -2309,25 +3222,30 @@ function runSubAgents(parentId, parentEntry, tasks, onDone) {
     // Every ghost failed → nothing to synthesize. Don't burn a synthesis call;
     // hand the failure straight back so the Director can re-plan.
     if (!okResults.length) {
-      if (onDone) try { onDone("(ทุก sub-agent ทำงานไม่สำเร็จ)", false); } catch {}
+      if (onDone) try { onDone("(all sub-agents failed)", false); } catch {}
       return;
     }
     const failed = results.length - okResults.length;
     // Feed only the succeeded outputs (trims input, too).
     const report = okResults.map((r, i) => `--- SUB ${i + 1}: ${r.task}\n${r.text}`).join("\n\n") +
-      (failed ? `\n\n(${failed} sub-agent ไม่สำเร็จ — ข้ามไป)` : "");
+      (failed ? `\n\n(${failed} sub-agent failed — skipped)` : "");
     runClaude(parentId,
       `All your sub-agents have reported back:\n\n${report}\n\n` +
       `Now synthesize the FINAL answer to the user's original request (earlier ` +
       `in this conversation), in the user's language. Complete but concise.`,
       { session: parentEntry.key, noSub: true, onDone,
-        logPrompt: `👻 sub-agents ${tasks.length} ตัวรายงานผลครบแล้ว — สรุปผล` });
+        logPrompt: `👻 ${tasks.length} sub-agents reported back — synthesize` });
   }
 }
 
 // One ghost: a lean twin of runClaude. Pre-created "@sub" entry, parent's
 // tools, no skills preamble, no resume, and never splits further.
 function runSub(parentId, subId, taskText, entry, onDone) {
+  const runtime = runtimeConfig.effectiveAgentRuntime(reg, parentId);
+  if (runtime === "codex")
+    return runCodexSub(parentId, subId, taskText, entry, onDone);
+  if (runtime === "hermes")
+    return runHermesSub(parentId, subId, taskText, entry, onDone);
   const a = reg.agents[parentId] || { name: parentId, role: "Staff" };
   const picked = a.tools && a.tools.length ? a.tools
     : ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
@@ -2361,8 +3279,8 @@ function runSub(parentId, subId, taskText, entry, onDone) {
   // Ghosts run on the parent agent's backend (the swappable brain).
   const route = brainRoute(parentId);
   if (route.modelArgs.length) args.push(...route.modelArgs);
-  const child = spawn("claude", args, {
-    cwd: subCwd, shell: true,
+  const child = spawnClaude(args, {
+    cwd: subCwd,
     env: { ...process.env, ...(reg.apiKeys || {}), ...route.env, OFFICE_ADAPTER: "1", OFFICE_AGENT: subId, OFFICE_TASK: entry.key },
   });
   child.stdin.write(
@@ -2425,6 +3343,176 @@ function runSub(parentId, subId, taskText, entry, onDone) {
   child.on("close", () => finish(!!lastText));
 }
 
+function runJsonCliSub(parentId, subId, taskText, entry, onDone, cfg) {
+  const runtime = cfg.runtime;
+  const model = cfg.model || runtime;
+  const a = reg.agents[parentId] || { name: parentId, role: "Staff", prompt: "" };
+  const subCwd = (entry.proj && projectDir(entry.proj)) || WORKSPACE;
+  const spec = cfg.spawnSpec({
+    cwd: subCwd,
+    threadId: entry[cfg.threadField] || "",
+    useWsl: process.platform === "win32" && !!reg[cfg.useWslField],
+    distro: reg[cfg.distroField] || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: subId, OFFICE_TASK: entry.key },
+  });
+  child.stdin.write(
+    `You are a temporary SUB-AGENT — a parallel clone of "${a.name}" (${a.role}) ` +
+    `at this AI office.` +
+    (a.prompt ? `\nParent persona:\n${a.prompt}\n` : "\n") +
+    `You were split off for ONE focused job. Do it fast and directly; your final ` +
+    `message must BE the result (data, findings, answer) — no meta talk, no asking ` +
+    `back. Reply in the language of the job. Never split further.\n\nJOB: ${taskText}`);
+  child.stdin.end();
+  let buf = "", lastText = "", errText = "", finished = false;
+  const finish = (ok) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(watchdog);
+    onDone(lastText || (!ok ? errText.trim() : ""), ok);
+  };
+  const watchdog = setTimeout(() => {
+    killTree(child);
+    finish(false);
+  }, 6 * 60000);
+  child.stdout.on("data", (c) => {
+    buf += c;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      const ev = cfg.parseJsonLine(line);
+      if (!ev) continue;
+      if (ev.type === "thread.started" && ev.thread_id) {
+        entry[cfg.threadField] = ev.thread_id;
+        saveSess();
+      } else if (ev.type === "item.started") {
+        const label = cfg.progressLabel(ev);
+        if (!label) continue;
+        entry.log.push({ who: "tool", text: label, ts: Date.now() });
+        while (entry.log.length > 200) entry.log.shift();
+        saveSess();
+        broadcast({ type: "subagent.progress", agent: parentId, sub: subId,
+          tool: label, session: entry.key, runtime, model });
+      } else if (ev.type === "item.completed") {
+        const txt = cfg.textFromEvent(ev);
+        if (txt) {
+          lastText = txt;
+          entry.log.push({ who: "agent", text: txt.slice(0, 8000),
+            ts: Date.now(), runtime, model });
+          while (entry.log.length > 200) entry.log.shift();
+          entry.ts = Date.now();
+          saveSess();
+          broadcast({ type: "chat.message", agent: parentId, sub: subId,
+            text: txt, session: entry.key, runtime, model });
+        } else {
+          const label = cfg.progressLabel(ev);
+          if (label) broadcast({ type: "subagent.progress", agent: parentId, sub: subId,
+            tool: label, session: entry.key, runtime, model });
+        }
+      } else if (ev.type === "turn.completed") {
+        statBump("done");
+        finish(true);
+      } else if (ev.type === "error" || ev.type === "turn.failed") {
+        errText += "\n" + String(ev.message || ev.error || `${runtime} failed`);
+        statBump("failed");
+        finish(false);
+      }
+    }
+  });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error(`[sub:${subId}:${runtime}]`, s.trim());
+  });
+  child.on("error", (e) => { errText += "\n" + e.message; finish(false); });
+  child.on("close", () => finish(!!lastText));
+}
+
+function runCodexSub(parentId, subId, taskText, entry, onDone) {
+  return runJsonCliSub(parentId, subId, taskText, entry, onDone, {
+    runtime: "codex",
+    model: "codex",
+    threadField: "codexThread",
+    useWslField: "codexUseWsl",
+    distroField: "codexWslDistro",
+    spawnSpec: codexRuntime.codexSpawnSpec,
+    parseJsonLine: codexRuntime.parseCodexJsonLine,
+    progressLabel: codexRuntime.codexProgressLabel,
+    textFromEvent: codexRuntime.codexTextFromEvent,
+  });
+}
+
+function runHermesSub(parentId, subId, taskText, entry, onDone) {
+  const runtime = "hermes";
+  const model = "hermes";
+  const a = reg.agents[parentId] || { name: parentId, role: "Staff", prompt: "" };
+  const subCwd = (entry.proj && projectDir(entry.proj)) || WORKSPACE;
+  const prompt =
+    `You are a temporary SUB-AGENT — a parallel clone of "${a.name}" (${a.role}) at this AI office.` +
+    (a.prompt ? `\nParent persona:\n${a.prompt}\n` : "\n") +
+    `You were split off for ONE focused job. Do it fast and directly; your final message must BE the result ` +
+    `(data, findings, answer) — no meta talk, no asking back. Reply in the language of the job. Never split further.\n\nJOB: ${taskText}`;
+  const spec = hermesRuntime.hermesSpawnSpec({
+    cwd: subCwd,
+    prompt,
+    threadId: entry.hermesThread || "",
+    useWsl: process.platform === "win32" && !!reg.hermesUseWsl,
+    distro: reg.hermesWslDistro || "",
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    env: { ...process.env, ...(reg.apiKeys || {}),
+      OFFICE_ADAPTER: "1", OFFICE_AGENT: subId, OFFICE_TASK: entry.key },
+  });
+  let outBuf = "", errText = "", finished = false;
+  const finish = (text, ok) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(watchdog);
+    onDone(text || (!ok ? errText.trim() : ""), ok);
+  };
+  const watchdog = setTimeout(() => {
+    killTree(child);
+    finish("(watchdog: total timeout)", false);
+  }, 6 * 60000);
+  child.stdout.on("data", (c) => { outBuf += c.toString(); });
+  child.stderr.on("data", (c) => {
+    const s = c.toString();
+    errText += s;
+    if (errText.length > 8000) errText = errText.slice(-8000);
+    console.error(`[sub:${subId}:${runtime}]`, s.trim());
+  });
+  child.on("error", (e) => { errText += "\n" + e.message; finish("", false); });
+  child.on("close", (code) => {
+    const parsed = hermesRuntime.parseHermesTextOutput(outBuf);
+    const errParsed = hermesRuntime.parseHermesTextOutput(errText);
+    const sessionId = parsed.sessionId || errParsed.sessionId;
+    if (sessionId) { entry.hermesThread = sessionId; saveSess(); }
+    if (code === 0 && parsed.text) {
+      entry.log.push({ who: "agent", text: parsed.text.slice(0, 8000),
+        ts: Date.now(), runtime, model });
+      while (entry.log.length > 200) entry.log.shift();
+      entry.ts = Date.now();
+      saveSess();
+      broadcast({ type: "chat.message", agent: parentId, sub: subId,
+        text: parsed.text, session: entry.key, runtime, model });
+      statBump("done");
+      finish(parsed.text, true);
+    } else {
+      statBump("failed");
+      finish(parsed.text || errText.trim(), false);
+    }
+  });
+}
+
 // ---------------------------------------------------------------- voice
 // Speech-to-text for the office mic: the overlay records WAV in the
 // webview, ships it here, and the vault's keys do the listening —
@@ -2440,7 +3528,7 @@ function voiceTranscribe(buf) {
     const tryGemini = (err) => {
       if (!gm) {
         return reject(err || new Error(
-          "ยังไม่มี API key สำหรับถอดเสียง — เพิ่ม OPENAI_API_KEY หรือ GEMINI_API_KEY ใน ⚙ CONNECT"));
+          "No transcription API key is set — add OPENAI_API_KEY or GEMINI_API_KEY in ⚙ CONNECT"));
       }
       const body = JSON.stringify({
         contents: [{ parts: [
@@ -2583,9 +3671,9 @@ function pcmToWav(pcm, rate) {
 function ttsSpeak(presetId, text, _try = 0) {
   return new Promise((resolve, reject) => {
     const gm = (reg.apiKeys || {}).GEMINI_API_KEY;
-    if (!gm) return reject(new Error("ต้องมี GEMINI_API_KEY (⚙ CONNECT) สำหรับเสียงพูด"));
+    if (!gm) return reject(new Error("GEMINI_API_KEY is required in ⚙ CONNECT for speech"));
     const p = VOICE_PRESETS[presetId];
-    if (!p) return reject(new Error("ไม่รู้จักเสียง: " + presetId));
+    if (!p) return reject(new Error("Unknown voice: " + presetId));
     // The preview TTS model 500s / overloads now and then — retry a transient hiccup
     // up to twice before giving up (most recover). Config errors above are NOT retried.
     const retryable = (m) => /internal|overload|unavailable|temporar|try again|timeout|\b50\d\b|\b429\b|ECONN|socket|network/i.test(String(m || ""));
@@ -2732,7 +3820,7 @@ function genImage(prompt) {
       resolve({ path: full, url: "/uploads/" + name });
     };
     const tryGemini = (err) => {
-      if (!k.GEMINI_API_KEY) return reject(err || new Error("ต้องมี OPENAI_API_KEY หรือ GEMINI_API_KEY (⚙ CONNECT)"));
+      if (!k.GEMINI_API_KEY) return reject(err || new Error("OPENAI_API_KEY or GEMINI_API_KEY is required in ⚙ CONNECT"));
       const body = JSON.stringify({
         contents: [{ parts: [{ text: "Generate an image: " + String(prompt).slice(0, 2000) }] }],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
@@ -2809,7 +3897,19 @@ function semverGt(a, b) {
 const APP_VERSION = localVersion();
 let latestVersion = APP_VERSION;   // newest seen on main (for /version + banner)
 let updateNotified = null;
+function updateChecksEnabled() {
+  const disabled = /^(1|true|yes|on)$/i.test(String(process.env.BAGIDEA_DISABLE_UPDATES || ""));
+  if (disabled) return false;
+  return reg.updateChecks === true;
+}
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+function appleScriptString(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 function checkUpdate() {
+  if (!updateChecksEnabled()) return;
   const local = localVersion();
   require("https").get({
     host: "raw.githubusercontent.com",
@@ -2918,29 +4018,29 @@ function channelCommand(text) {
   const cmd = text.slice(1).split(/\s+/)[0].toLowerCase();
   if (cmd === "help" || cmd === "start")
     return [
-      "🧭 คำสั่งลัด:",
-      "/status — ภาพรวมออฟฟิศ",
-      "/agents — รายชื่อทีม",
-      "/projects — โปรเจค",
-      "/who — ใครกำลังทำงานอยู่",
+      "🧭 Shortcuts:",
+      "/status — office overview",
+      "/agents — team list",
+      "/projects — projects",
+      "/who — who is working",
       "",
-      "พิมพ์ข้อความปกติ = สั่งงาน Director ได้เลย 👑",
+      "Send a normal message to assign work to the Director 👑",
     ].join("\n");
   if (cmd === "agents" || cmd === "team") {
     const list = Object.keys(reg.agents)
       .filter((id) => id !== "ceo")
       .map((id) => `• ${reg.agents[id].name} — ${reg.agents[id].role}`);
-    return list.length ? "👥 ทีมงาน:\n" + list.join("\n") : "ยังไม่มีพนักงาน";
+    return list.length ? "👥 Team:\n" + list.join("\n") : "No staff yet";
   }
   if (cmd === "projects") {
     const ps = projectStatus();
     return ps.length
-      ? "📁 โปรเจค:\n" + ps.map((p) => `• ${p.name}${p.ai ? " 🟢" : ""}`).join("\n")
-      : "ยังไม่มีโปรเจค";
+      ? "📁 Projects:\n" + ps.map((p) => `• ${p.name}${p.ai ? " 🟢" : ""}`).join("\n")
+      : "No projects yet";
   }
   if (cmd === "who") {
     const busy = projectStatus().filter((p) => p.ai).map((p) => `• ${p.name}`);
-    return busy.length ? "🟢 กำลังทำงานอยู่:\n" + busy.join("\n") : "ตอนนี้ทีมว่างอยู่ 😌";
+    return busy.length ? "🟢 Working now:\n" + busy.join("\n") : "The team is idle right now 😌";
   }
   if (cmd === "status") {
     const on = Object.entries(channels.status())
@@ -2948,12 +4048,12 @@ function channelCommand(text) {
       .map(([k]) => k);
     return [
       "🏢 BagIdea Office",
-      `พนักงาน: ${staffCount()} คน`,
-      `โปรเจค: ${projectStatus().length} (กำลังทำงาน ${projectStatus().filter((p) => p.ai).length})`,
-      `ช่องทางที่ต่อ: ${on.length ? on.join(", ") : "—"}`,
+      `Staff: ${staffCount()}`,
+      `Projects: ${projectStatus().length} (working ${projectStatus().filter((p) => p.ai).length})`,
+      `Connected channels: ${on.length ? on.join(", ") : "—"}`,
     ].join("\n");
   }
-  return `ไม่รู้จักคำสั่ง /${cmd} — พิมพ์ /help ดูทั้งหมด`;
+  return `Unknown command /${cmd} — type /help to see all commands`;
 }
 
 const channels = require("./channels")({
@@ -2986,7 +4086,7 @@ const channels = require("./channels")({
           onDone: (out, ok) => {
             release();
             if (typer) clearInterval(typer);
-            try { reply(ok && out ? out : "ขออภัยครับ ระบบติดขัดชั่วคราว ลองใหม่อีกครั้งนะครับ"); }
+            try { reply(ok && out ? out : "Sorry, the system hit a temporary issue. Please try again."); }
             catch (e) { console.error("[chan reply]", e.message); }
           } });
     });
@@ -2999,6 +4099,7 @@ const plugins = require("./plugins")({
   broadcast, reg, saveReg, workspace: WORKSPACE, daemonDir: __dirname,
   // run a real Claude Code turn as an agent (same engine the office uses).
   runClaude: (agent, prompt, opts) => runClaude(agent || "main", prompt, opts || {}),
+  runAgent: (agent, prompt, opts) => runAgent(agent || "main", prompt, opts || {}),
   // post a visible line to the office feed (shows in the overlay stream).
   feed: (text, agent) => broadcast({ type: "chat.message", agent: agent || "main", text: String(text) }),
   log: (s) => console.log(s),
@@ -3024,12 +4125,12 @@ function saveActions(meetingKey, arr) {
 }
 
 const BANTER = [
-  ["{a}: เห็นเจ้าเหมียวงีบบนโซฟาอีกแล้ว อิจฉาชีวิตมัน 🐱", "{b}: อย่าไปทักนะ เดี๋ยวตื่นมาเหยียบคีย์บอร์ดผม", "{a}: ครั้งก่อนมันพิมพ์ ggggggg ลงรายงานผมไป 555"],
-  ["{a}: เมื่อกี้เตะบอลข้ามตึกไปเลยนะ เห็นป่ะ ⚽", "{b}: เห็น… มันลอยผ่านหัว CEO ไปเฉียดมาก", "{a}: งั้นทำเงียบๆ ไว้นะ 🤫"],
-  ["{a}: กาแฟในแคนทีนหมดอีกแล้ว ☕", "{b}: ก็ {a} ชงทีเดียวครึ่งโถ!", "{a}: ข้อกล่าวหาที่ปฏิเสธไม่ได้ 😅"],
-  ["{a}: โต๊ะ Ghost Deck ข้างบนวิวดีมากนะ ลอยได้ด้วย", "{b}: ผมขึ้นไปทีไรเวียนหัวทุกที ร่างโปร่งแสงไม่ช่วยอะไรเลย", "{a}: มือใหม่ก็งี้แหละ 👻"],
-  ["{a}: คืนนี้ไฟสวนสวยเป็นพิเศษว่าไหม", "{b}: จริง เหมาะกับนั่งคิดงานเงียบๆ", "{a}: หรือนั่งไม่คิดอะไรเลยก็ดี 🌙"],
-  ["{a}: เห็นข่าว AI วันนี้ยัง ตลกมาก", "{b}: เราก็คือข่าว AI เดินได้นะรู้ตัวไหม", "{a}: …ลึกซึ้งจนขำไม่ออก 🤖"],
+  ["{a}: The cat is napping on the sofa again. I envy that life 🐱", "{b}: Don't wake it up, it will step on my keyboard again", "{a}: Last time it typed ggggggg into my report"],
+  ["{a}: Did you see that soccer kick clear the whole building? ⚽", "{b}: I saw it skim right over the CEO's head", "{a}: Then let's keep that quiet 🤫"],
+  ["{a}: The canteen is out of coffee again ☕", "{b}: Because {a} brews half the pot at once!", "{a}: A charge I cannot deny 😅"],
+  ["{a}: The Ghost Deck upstairs has a great view. It floats, too", "{b}: I get dizzy every time I go up there. Being translucent does not help", "{a}: Rookie ghost problem 👻"],
+  ["{a}: The garden lights look especially good tonight", "{b}: True. Perfect for quiet thinking", "{a}: Or for not thinking at all 🌙"],
+  ["{a}: Did you see today's AI news? Hilarious", "{b}: We are walking AI news, you know", "{a}: ...too deep to laugh at 🤖"],
 ];
 
 let lastSocial = Date.now();
@@ -3050,10 +4151,10 @@ function socialTick(now) {
     // Most group hangouts are idea sessions now — the team brainstorms things
     // worth pitching to the CEO (the owner asked for more proposals).
     const gtopics = [
-      "ระดมไอเดียกันว่าทีมเราน่าจะทำ plugin อะไรเสริมออฟฟิศให้เจ้าของใช้ดีขึ้น แล้วถ้าตกผลึกให้เสนอ CEO",
-      "คุยกันว่าเจ้าของน่าจะชอบอะไร แล้วลองคิดโปรเจค/plugin สนุกๆ ที่ช่วยเขาได้ — อันไหนเข้าท่าก็ยื่นข้อเสนอ",
-      "ช่วยกันคิดว่ามีงานสร้างสรรค์อะไรที่ทีมอยากทำเป็นโปรเจค แล้วเสนอ CEO ดู",
-      "มารวมตัวคุยเล่นกันแบบสบายๆ เล่าเรื่องสนุกๆ ที่เจอระหว่างทำงาน หยอกล้อกันได้"];
+      "Brainstorm an office plugin that would help the owner. If the idea solidifies, propose it to the CEO",
+      "Discuss what the owner might like, then think of a useful project/plugin. Propose the strongest idea",
+      "Think together about a creative project the team wants to build, then propose it to the CEO",
+      "Hang out casually, share funny work moments, and tease each other lightly"];
     runDiscussion(group, gtopics[Math.floor(Math.random() * gtopics.length)],
       1, true);   // 1 round (was 2) — ~3 runs instead of up to 8, hangout still happens
     return;
@@ -3065,7 +4166,7 @@ function socialTick(now) {
     const lines = BANTER[Math.floor(Math.random() * BANTER.length)];
     const nameOf = (id) => (reg.agents[id] || { name: id }).name;
     const task = "soc" + (now % 100000);
-    broadcast({ type: "collab.started", agents: pick, task, text: "พักเบรก ☕" });
+    broadcast({ type: "collab.started", agents: pick, task, text: "Coffee break ☕" });
     lines.forEach((tpl, i) => {
       const who = tpl.startsWith("{a}") ? pick[0] : pick[1];
       const text = tpl.replace(/\{a\}:\s*/, "").replace(/\{b\}:\s*/, "")
@@ -3076,10 +4177,10 @@ function socialTick(now) {
       2500 + lines.length * 3600 + 2500);
   } else {
     // a REAL conversation between AIs — they often pitch a project to the CEO.
-    const topics = ["ระดมไอเดียสนุกๆ ว่าอยากสร้างอะไรเป็นโปรเจค/plugin ของทีม แล้วเสนอ CEO ถ้าเข้าท่า",
-      "คุยกันว่าออฟฟิศน่าจะมี plugin อะไรเพิ่ม แล้วลองยื่นข้อเสนอให้เจ้าของ",
-      "คุยเล่นเรื่องงานช่วงนี้ แลกเปลี่ยนว่าใครทำอะไรอยู่ หยอกล้อกันได้",
-      "แชร์เทคนิคการทำงานที่เพิ่งค้นพบ"];
+    const topics = ["Brainstorm a fun team project/plugin and propose it to the CEO if it seems useful",
+      "Discuss what plugin the office should have next, then propose it to the owner",
+      "Chat about recent work, share what everyone is doing, and joke around lightly",
+      "Share a work technique you recently discovered"];
     runDiscussion(pick, topics[Math.floor(Math.random() * topics.length)], 1, true);
   }
 }
@@ -3103,6 +4204,8 @@ const MOOD_LINES = {
 };
 let lastAmbient = Date.now();
 function ambientTick(now) {
+  const min = Number(reg.socialMin !== undefined ? reg.socialMin : 0);
+  if (!min) return;
   if (activeDiscussions > 0 || agentBusy.size > 0) return;
   if (now - lastAmbient < 55 * 1000) return;        // at most once every ~55s
   if (Math.random() > 0.45) return;                 // ...and only ~45% of those
@@ -3178,8 +4281,9 @@ const SOCIAL_PROPOSAL_INSTRUCTION =
   `"plugin" เท่านั้น (ดู docs/guide/plugins.md — plugin เข้าถึงโปรแกรมได้ลึก: panel, route, command, ` +
   `broadcast, ฯลฯ ทำเป็น solution จริงให้เจ้าของได้) — ห้ามแก้ระบบหลัก (daemon/godot/shell) ตรง ๆ เพราะจะทำให้โปรแกรมพัง.`;
 
-// Meeting templates fill the launcher (topic + discussion depth). Pure data —
-// the overlay maps them to a <select>; they never change phase structure.
+// Meeting templates fill the launcher. `rounds` means discussion rounds AFTER
+// the fixed opening round, so total agent turns = participants * (1 + rounds).
+// The overlay displays that arithmetic before the owner starts the meeting.
 const MEETING_TEMPLATES = [
   { id: "standup",       label: "Standup",       topic: "Standup: what you did / will do / blockers", rounds: 1 },
   { id: "retro",         label: "Retro",         topic: "Retro: what went well / badly / to improve", rounds: 2 },
@@ -3212,10 +4316,76 @@ function buildMeetingContext(topic, ids) {
   return { projectBlurb, memory };
 }
 
+function meetingSummaryEntry(meeting) {
+  const log = Array.isArray(meeting && meeting.log) ? meeting.log : [];
+  return log.find((m) => m && (m.isSummary || m.phase === "summary")) || null;
+}
+
+function meetingSearchText(meeting, summary) {
+  const agents = (meeting.agents || []).map((id) => {
+    const a = reg.agents && reg.agents[id];
+    return [id, a && a.name, a && a.role].filter(Boolean).join(" ");
+  }).join(" ");
+  return [
+    meeting.key,
+    meeting.title,
+    new Date(meeting.ts || Date.now()).toISOString(),
+    agents,
+    summary && summary.text,
+  ].filter(Boolean).join("\n").toLowerCase();
+}
+
+function listMeetingSummaries({ q = "", keys = [], limit = 20 } = {}) {
+  const wanted = new Set((keys || []).map(String).filter(Boolean));
+  const needle = String(q || "").trim().toLowerCase();
+  const out = [];
+  for (const meeting of (sess["@group"] || [])) {
+    if (!meeting || !meeting.key) continue;
+    if (wanted.size && !wanted.has(String(meeting.key))) continue;
+    const summary = meetingSummaryEntry(meeting);
+    if (!summary || !summary.text) continue;
+    if (needle && !meetingSearchText(meeting, summary).includes(needle)) continue;
+    out.push({
+      key: meeting.key,
+      title: meeting.title || meeting.key,
+      ts: meeting.ts || 0,
+      date: new Date(meeting.ts || Date.now()).toISOString(),
+      agents: Array.isArray(meeting.agents) ? meeting.agents.slice() : [],
+      summary: String(summary.text),
+    });
+  }
+  out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return out.slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)));
+}
+
+function buildSelectedMeetingHistory(keys) {
+  const ids = (keys || []).map(String).filter(Boolean).slice(0, 5);
+  if (!ids.length) return "";
+  const picked = listMeetingSummaries({ keys: ids, limit: 5 });
+  if (!picked.length) return "";
+  return "Relevant prior meeting summaries selected by the owner:\n" +
+    picked.map((m, i) => {
+      const names = (m.agents || []).map((id) => (reg.agents[id] || { name: id }).name).join(", ");
+      return `${i + 1}. Meeting: ${m.title}\nDate: ${m.date}\nParticipants: ${names}\nSummary:\n${m.summary.slice(0, 1800)}`;
+    }).join("\n\n");
+}
+
 // Dynamic sliding window: enough turns to stay grounded, capped so a long
 // meeting never feeds the whole transcript to every call. The cap (20) only
 // bites around ~96 messages — a safety ceiling, not the common case.
 function windowSize(len) { return Math.min(20, 8 + Math.floor(len / 8)); }
+
+function meetingLanguageName(...parts) {
+  const s = parts.map((p) => String(p || "")).join("\n");
+  if (/[\u4e00-\u9fff]/.test(s)) return "Simplified Chinese";
+  if (/[\u3040-\u30ff]/.test(s)) return "Japanese";
+  if (/[ก-๛]/.test(s)) return "Thai";
+  return "English";
+}
+
+function meetingTurnLanguageRule(lang) {
+  return `Language rule: reply only in ${lang}. Do not switch to Thai, Japanese, English, or any other language unless directly quoting source text or a proper noun.`;
+}
 
 // Summarize a finished meeting in ONE call: markdown minutes + a fenced JSON
 // actionItems[] array. Owners are validated against the roster (unknown owners
@@ -3230,7 +4400,10 @@ async function generateMeetingSummary(entry, ids) {
   const prompt =
     `You are the secretary summarizing a just-finished team meeting.\n` +
     `Topic: ${entry.title}\nParticipants: ${names}\n\nTranscript:\n${transcript}\n\n` +
-    `Write a concise markdown summary with sections: ## Summary, ## Decisions, ## Open Questions.\n` +
+    `Language rule: write the markdown summary and each action item's text in the meeting's primary language. ` +
+    `If the transcript is mostly Chinese, write Chinese. If languages are mixed, follow the topic and the majority of participant messages.\n` +
+    `Write a concise markdown summary with sections: ## Summary, ## Decisions, ## Conclusion, ## Open Questions.\n` +
+    `Conclusion must be explicit: state the meeting's final position, unresolved blockers, and next decision point.\n` +
     `Then output ONE fenced block of JSON — an array of action items, each ` +
     `{ "owner": "<one of: ${roster}>", "text": "<the follow-up>", "due": "<optional>" }.\n` +
     `Only use owners from the list above. If there are no action items, output [].\n` +
@@ -3254,15 +4427,18 @@ async function generateMeetingSummary(entry, ids) {
   return { summary, actions };
 }
 
-async function runDiscussion(ids, topic, rounds, social, preKey) {
+async function runDiscussion(ids, topic, rounds, social, preKey, opts = {}) {
   activeDiscussions++;
   const task = "disc" + (Date.now() % 100000);
+  const discussionRounds = Math.max(1, Number(rounds) || 2);
   // Every meeting is a persistent GROUP session ("@group" bucket): topic,
   // participants and the full transcript — readable later from the thread
   // menu, and written to workspace/meetings/ so agents can grep it too.
   const entry = { key: preKey || ("g" + Date.now()), sid: null, ts: Date.now(),
     title: String(topic).replace(/\s+/g, " ").slice(0, 60),
-    agents: ids.slice(), task, log: [] };
+    agents: ids.slice(), task, rounds: discussionRounds,
+    expectedTurns: ids.length * (social ? discussionRounds : (1 + discussionRounds)),
+    log: [] };
   sess["@group"] = sess["@group"] || [];
   sess["@group"].push(entry);
   saveSess();
@@ -3273,12 +4449,15 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
   broadcast({ type: "collab.started", agents: ids, task, text: topic, session: entry.key });
   broadcast({ type: "meeting.live", session: entry.key, topic: entry.title, agents: ids });
   // Build grounding context once. projectBlurb is shared; memory[id] is private.
-  const ctx = social ? { projectBlurb: "", memory: {} } : buildMeetingContext(topic, ids);
+  const ctx = social ? { projectBlurb: "", memory: {}, meetingHistory: "" } : {
+    ...buildMeetingContext(topic, ids),
+    meetingHistory: buildSelectedMeetingHistory(opts.historyMeetings || []),
+  };
   // Phases: social collapses to one `chat` phase (PROPOSAL block still fires).
   const phases = social
-    ? [{ name: "chat", instruction: "", rounds: rounds || 1 }]
+    ? [{ name: "chat", instruction: "", rounds: discussionRounds }]
     : [{ name: "opening", instruction: OPENING_INSTRUCTION, rounds: 1 },
-       { name: "discussion", instruction: DISCUSSION_INSTRUCTION, rounds: Math.max(1, rounds || 2) }];
+       { name: "discussion", instruction: DISCUSSION_INSTRUCTION, rounds: discussionRounds }];
   try {
     outerPhase:
     for (const phase of phases) {
@@ -3307,21 +4486,22 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
           const recent = entry.log.slice(-win)
             .map((m) => `${(reg.agents[m.who] || { name: m.who }).name}: ${m.text}`).join("\n");
           const isOpening = phase.name === "opening";
+          const meetingLang = meetingLanguageName(topic, recent);
           const text = await claudeText(
             `You are "${a.name}" (${a.role}) in a ${social ? "casual break-room chat" : "team meeting"} at the office.\n` +
             (a.prompt ? `Your persona: ${a.prompt}\n` : "") +
             `Meeting topic: ${topic}\n` +
+            `${meetingTurnLanguageRule(meetingLang)}\n` +
             (ctx.projectBlurb && isOpening ? `${ctx.projectBlurb}\n` : "") +
+            (ctx.meetingHistory && isOpening ? `${ctx.meetingHistory}\n` : "") +
             (isOpening && ctx.memory[id] ? `Your private memory (only you see this):\n${ctx.memory[id]}\n` : "") +
             (recent ? `Recent discussion:\n${recent}\n` : "You open the meeting.\n") +
             `Phase: ${phase.name}. ` +
             (social ? `Give YOUR next contribution as ${a.name}.` : phase.instruction) +
-            `\nถ้าจำเป็นต้องใช้ข้อมูลจริงเพื่อให้ความเห็นแน่นขึ้น คุณค้นเองได้ ` +
-            `(WebSearch / WebFetch / Read) — เฉพาะตอนที่จำเป็นจริงๆ เท่านั้น ไม่ต้องค้นพร่ำเพรื่อ ` +
-            `และตอบกลับเป็นข้อความสนทนาตามปกติ.` +
+            `\nIf real-world facts are needed to make your point more reliable, use WebSearch, WebFetch, or Read only when genuinely necessary. Do not over-search. Reply as a normal meeting contribution.` +
             (social ? SOCIAL_PROPOSAL_INSTRUCTION : ""),
             { tools: social ? "" : "WebSearch,WebFetch,Read,Glob,Grep", provider: a && a.provider, model: a && a.model, env: { OFFICE_AGENT: id, OFFICE_TASK: task } });
-          let line = text.split("\n").filter(Boolean).join(" ").slice(0, 500);
+          let line = text.split("\n").map((s) => s.trim()).filter(Boolean).join("\n");
           // If the owner pressed End while this claude call was in flight, drop the
           // lagging reply entirely — otherwise it would surface as a ghost message
           // AFTER meeting.ended has already fired and the summary has been written
@@ -3334,18 +4514,14 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
             addProposal(id, ids, pm[1], pm[2]);
           }
           if (line) {
-            entry.log.push({ who: id, text: line, ts: Date.now(), phase: phase.name });
+            entry.log.push({ who: id, text: line, ts: Date.now(), phase: phase.name, social: !!social });
             saveSess();
-            broadcast({ type: "chat.message", agent: id, task, text: line, session: entry.key, phase: phase.name });
+            broadcast({ type: "chat.message", agent: id, task, text: line, session: entry.key, phase: phase.name, social: !!social });
           }
         }
       }
     }
   } finally {
-    broadcast({ type: "collab.ended", agents: ids, task, session: entry.key });
-    broadcast({ type: "meeting.ended", session: entry.key });
-    activeMeetings.delete(entry.key);
-    activeDiscussions = Math.max(0, activeDiscussions - 1);
     // One summary secretary → one canonical action-item list (per ADR-0001 these
     // live in their own .actions.json, NOT jobs.json, and NOT on Mission Control).
     // The summary call is best-effort: it must NEVER block or throw away the
@@ -3360,10 +4536,20 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
       summary = "(summary generation failed)";
       actions = [];
     }
+    if (summary) {
+      const already = entry.log.some((m) => m && m.phase === "summary");
+      if (!already) {
+        entry.log.push({ who: "main", text: summary, ts: Date.now(), phase: "summary", isSummary: true });
+        saveSess();
+        broadcast({ type: "chat.message", agent: "main", task, text: summary,
+          session: entry.key, phase: "summary", isSummary: true });
+      }
+    }
     // Always attempt to save and broadcast action items, even if summary failed
+    let stamped = [];
     try {
       if (actions.length) {
-        const stamped = actions.map((a, i) => ({
+        stamped = actions.map((a, i) => ({
           id: `${entry.key}-${i + 1}`, meeting: entry.key, owner: a.owner,
           text: a.text, due: a.due || "", status: "open", created: Date.now()
         }));
@@ -3372,18 +4558,54 @@ async function runDiscussion(ids, topic, rounds, social, preKey) {
           broadcast({ type: "meeting.action", action: a, session: entry.key });
       }
     } catch (e) { console.error("[meeting] action items save failed:", e && e.message); }
+    const summaryWithDrafts = combineSummaryAndDrafts(summary, stamped);
+    if (summaryWithDrafts) {
+      const sidx = (entry.log || []).findIndex((m) => m && m.phase === "summary" && m.isSummary);
+      if (sidx >= 0 && entry.log[sidx].text !== summaryWithDrafts) {
+        entry.log[sidx].text = summaryWithDrafts;
+        saveSess();
+      }
+      for (const id of ids) {
+        const ownLines = entry.log
+          .filter((m) => m && m.who === id && m.text)
+          .slice(0, 4)
+          .map((m) => `- [${m.phase || "chat"}] ${String(m.text).slice(0, 500)}`)
+          .join("\n");
+        appendSessionNote(id, [
+          `🗣 Meeting trace: ${entry.title}`,
+          ownLines ? `\nYour contributions:\n${ownLines}` : "",
+          `\nSummary:\n${summaryWithDrafts}`,
+        ].join("\n").trim(), {
+          who: "main",
+          phase: "meeting-summary",
+          isSummary: true,
+          meeting: entry.key,
+          meetingTitle: entry.title,
+          agents: ids,
+        });
+      }
+      saveSess();
+    }
     // Markdown minutes inside the agents' workspace — searchable by them.
     try {
       const dir = path.join(WORKSPACE, "meetings");
       fs.mkdirSync(dir, { recursive: true });
       const names = ids.map((id) => (reg.agents[id] || { name: id }).name).join(", ");
-      const summaryBlock = summary ? `## Summary\n\n${summary}\n\n## Transcript\n\n` : "";
+      const summaryBlock = summaryWithDrafts ? `## Summary\n\n${summaryWithDrafts}\n\n## Transcript\n\n` : "";
+      const transcript = entry.log
+        .filter((m) => !m.isSummary && m.phase !== "summary")
+        .map((m) => `**[${m.phase || "chat"}] ${(reg.agents[m.who] || { name: m.who }).name}**: ${m.text}`).join("\n\n");
       const md = `# Meeting: ${entry.title}\n\n- Date: ${new Date(entry.ts).toISOString()}\n` +
-        `- Participants: ${names}\n\n${summaryBlock}` +
-        entry.log.map((m) => `**[${m.phase || "chat"}] ${(reg.agents[m.who] || { name: m.who }).name}**: ${m.text}`).join("\n\n") + "\n";
+        `- Participants: ${names}\n- Discussion rounds: ${entry.rounds || ""}\n` +
+        `- Expected turns: ${entry.expectedTurns || ""}\n\n${summaryBlock}` +
+        transcript + "\n";
       fs.writeFileSync(path.join(dir, `${entry.key}.md`), md);
       try { if (retrievalOk) { retrieval.addDoc("arch", "meeting", `arch:meeting:${entry.key}`, md.slice(0, 1200)); retrieval.persist(); } } catch {}
     } catch (e) { console.error("[meeting] minutes write failed:", e && e.message); }
+    broadcast({ type: "collab.ended", agents: ids, task, session: entry.key });
+    broadcast({ type: "meeting.ended", session: entry.key });
+    activeMeetings.delete(entry.key);
+    activeDiscussions = Math.max(0, activeDiscussions - 1);
   }
 }
 
@@ -3464,6 +4686,11 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     try { res.end(fs.readFileSync(path.join(__dirname, "winlang.js"))); }
     catch { res.end("window.WinLang={build:async()=>({lang:'th',map:{},tr:s=>s,ensure:async()=>{}})};"); }
+
+  } else if (req.method === "GET" && req.url.split("?")[0] === "/activity-filter.js") {
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    try { res.end(fs.readFileSync(ACTIVITY_FILTER)); }
+    catch { res.end("window.BagideaActivityFilter={shouldShowInOfficeFeed:()=>true,shouldShowInThreadLog:()=>true};"); }
 
   } else if (req.method === "GET" && req.url.split("?")[0] === "/watch") {
     // Read-only live activity stream for an agent (opened as its own window) —
@@ -3567,7 +4794,7 @@ const server = http.createServer((req, res) => {
           const safety = setTimeout(() => {
             if (waited) { waited = null;
               res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-              res.end(JSON.stringify({ ok: false, text: "(timeout 10 นาที — งานยังทำต่อเบื้องหลัง)" })); }
+              res.end(JSON.stringify({ ok: false, text: "(timeout after 10 minutes — the task is still running in the background)" })); }
           }, 10 * 60000);
           waited = (text, ok) => {
             clearTimeout(safety);
@@ -3580,22 +4807,33 @@ const server = http.createServer((req, res) => {
         // CEO orders route through the Director; talking to the Director
         // directly gives him the same dispatch power. New threads adopt the
         // requested project workspace.
-        const task = agent === "ceo"
-          ? ceoFlow(prompt, session, project,
-              { logPrompt: voice ? "🎤👑 (สั่งด้วยเสียง) " + origPrompt : origPrompt,
-                relay: true,  // mirror the CEO conversation to connected channels
+        const mention = parseAgentMentionShortcut(origPrompt, reg.agents);
+        let entryKey = "";
+        const captureEntry = (key) => { entryKey = key || entryKey; };
+        const task = mention
+          ? mentionShortcutFlow(origPrompt, mention, session, project,
+              { logPrompt: voice ? "🎤👑 " + origPrompt : origPrompt,
+                onEntry: captureEntry,
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
-          : agent === "main"
-            ? runClaude("main", prompt + directorNote(),
+          : agent === "ceo"
+            ? ceoFlow(prompt, session, project,
+              { logPrompt: voice ? "🎤👑 (voice order) " + origPrompt : origPrompt,
+                relay: true,  // mirror the CEO conversation to connected channels
+                onEntry: captureEntry,
+                onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
+            : agent === "main"
+              ? runClaude("main", prompt + directorNote(),
                 { session, project, logPrompt: origPrompt,
+                  onEntry: captureEntry,
                   filterText: makeDelegateFilter(0, session),
                   onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined })
-            : runClaude(agent, prompt, { session, project, logPrompt: origPrompt,
+              : runClaude(agent, prompt, { session, project, logPrompt: origPrompt,
                 resumable: true, resumePrompt: origPrompt,  // a member's direct task auto-resumes
+                onEntry: captureEntry,
                 onDone: wait ? (t, ok) => waited && waited(t, ok) : undefined });
         if (!wait) {
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ task }));
+          res.end(JSON.stringify({ task, session: entryKey }));
         }
       } catch (e) {
         res.writeHead(400);
@@ -3657,6 +4895,65 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ sessions: list }));
 
+  } else if (req.method === "POST" && req.url === "/sessions/open") {
+    if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
+    readBody(req, (body) => {
+      try {
+        const { agent = "main", session = "" } = JSON.parse(body || "{}");
+        const list = sess[agent] || [];
+        const entry = String(session)
+          ? list.find((e) => e.key === session)
+          : list.slice().sort((a, b) => b.ts - a.ts)[0];
+        if (!entry) { res.writeHead(404); return res.end("session not found"); }
+        const dir = entry.proj && projectDir(entry.proj) ? projectDir(entry.proj) : WORKSPACE;
+        const rt = runtimeConfig.effectiveAgentRuntime(reg, agent);
+        const shq = (s) => "'" + String(s).replace(/'/g, "'\"'\"'") + "'";
+        const codexThread = entry.codexThread || "";
+        const hermesThread = entry.hermesThread || "";
+        let resume;
+        let winPsCmd = "";
+        if (rt === "codex" || rt === "hermes") {
+          const useWsl = rt === "codex" ? reg.codexUseWsl : reg.hermesUseWsl;
+          const distroValue = rt === "codex" ? reg.codexWslDistro : reg.hermesWslDistro;
+          const args = rt === "codex"
+            ? (codexThread ? ["resume", codexThread] : [])
+            : (hermesThread ? ["--resume", hermesThread] : ["--cli"]);
+          if (process.platform === "win32" && useWsl) {
+            winPsCmd = wslCliLaunchPsCommand(dir, rt, args, String(distroValue || "").trim());
+            resume = "";
+          } else {
+            resume = [rt, ...args].map(shq).join(" ");
+          }
+        } else {
+          resume = entry.sid
+            ? claudeRuntime.claudeResumeCommand({ cwd: dir, sid: entry.sid })
+            : claudeRuntime.claudeContinueCommand({ cwd: dir });
+        }
+        if (process.platform === "win32") {
+          const title = `BAGIDEA_${agent}_${entry.key}`.replace(/[^\w-]/g, "_");
+          const psCmd = rt === "claude" && claudeUseWsl()
+            ? wslClaudeLaunchPsCommand(dir, entry.sid ? ["--resume", entry.sid] : ["-c"])
+            : (winPsCmd || powerShellEncodedCommand(resume));
+          const terminalCmd = `powershell -NoLogo -NoExit -ExecutionPolicy Bypass ${psCmd}`;
+          const line = HAS_WT
+            ? `/c start "" "${WT_EXE}" -w new new-tab --title "${title}" --suppressApplicationTitle -d "${dir}" ${terminalCmd}`
+            : `/c start "${title}" /D "${dir}" conhost.exe ${terminalCmd}`;
+          spawn("cmd.exe", [line], { windowsVerbatimArguments: true, windowsHide: true, detached: true });
+        } else if (process.platform === "darwin") {
+          const script = `tell application "Terminal" to do script "${appleScriptString(`cd ${shq(dir)} && ${resume}`)}"`;
+          spawn("osascript", ["-e", script], { detached: true });
+        } else {
+          spawn("x-terminal-emulator", ["-e", "bash", "-lc", `cd ${shq(dir)}; ${resume}; exec bash`],
+            { detached: true, stdio: "ignore" });
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
   } else if (req.method === "GET" && req.url === "/brains") {
     // Monitoring snapshot: every provider's connect status + every agent's brain
     // (provider/model) and latest context usage. Feeds the 🧠 BRAINS sidebar panel.
@@ -3674,7 +4971,8 @@ const server = http.createServer((req, res) => {
       const lu = latest && latest.lastUsage;
       const usage = lu ? { in: lu.in, out: lu.out, win: lu.win,
         pct: lu.win ? Math.min(100, Math.round(lu.in / lu.win * 100)) : 0, ts: lu.ts } : null;
-      agents.push({ id, name: a.name, role: a.role, provider: p, model: a.model || "", tag: modelTag(id), usage });
+      agents.push({ id, name: a.name, role: a.role, provider: p, model: a.model || "",
+        runtime: runtimeConfig.effectiveAgentRuntime(reg, id), tag: modelTag(id), usage });
       (byProvider[p] = byProvider[p] || []).push(id);
     }
     const ids = Array.from(new Set([...KNOWN, ...Object.keys(pc)]));
@@ -3698,10 +4996,13 @@ const server = http.createServer((req, res) => {
         if (bad) throw new Error("unknown agent: " + bad);
         if (ids.length < 2) throw new Error("need at least 2 agents");
         if (!p.topic) throw new Error("no topic");
+        const historyMeetings = Array.isArray(p.historyMeetings)
+          ? p.historyMeetings.map((x) => String(x)).filter(Boolean).slice(0, 5)
+          : [];
         // Concurrent meetings are allowed — disjoint teams huddle in parallel,
         // and the wallpaper ghost-splits anyone double-booked.
         const mkey = "g" + Date.now();
-        runDiscussion(ids, String(p.topic), Math.min(Math.max(Number(p.rounds) || 2, 1), 3), false, mkey);
+        runDiscussion(ids, String(p.topic), Math.min(Math.max(Number(p.rounds) || 2, 1), 6), false, mkey, { historyMeetings });
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true, session: mkey }));
       } catch (e) {
@@ -3710,20 +5011,29 @@ const server = http.createServer((req, res) => {
       }
     });
 
+  } else if (req.method === "GET" && req.url.startsWith("/meetings/search")) {
+    const u = new URL(req.url, "http://x");
+    const q = u.searchParams.get("q") || "";
+    const limit = parseInt(u.searchParams.get("limit") || "20", 10) || 20;
+    const meetings = listMeetingSummaries({ q, limit }).map((m) => ({
+      ...m,
+      names: (m.agents || []).map((id) => (reg.agents[id] || { name: id }).name),
+      summary: m.summary.slice(0, 2400),
+    }));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ q, meetings }));
+
   } else if (req.method === "POST" && req.url === "/discuss/message") {
     // Owner speaks into a LIVE meeting. No async chain, no per-agent claudeText:
     // we just append the CEO's line to entry.log (phase "user") and broadcast
     // it. The main loop's sliding window picks it up on the next agent's turn,
     // so replies arrive in turn order — no racing claude processes.
-    // Owner-only — this is the human speaking AS the CEO into the meeting, so an
-    // agent must not be able to forge a CEO line and steer the discussion.
-    if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
     readBody(req, (body) => {
       try {
         const { session, text } = JSON.parse(body);
         const live = activeMeetings.get(session);
         if (!live) { res.writeHead(404); return res.end("meeting not live"); }
-        const msg = String(text || "").trim().slice(0, 1000);
+        const msg = String(text || "").trim();
         if (!msg) throw new Error("empty message");
         live.entry.log.push({ who: "ceo", text: msg, ts: Date.now(), phase: "user" });
         saveSess();
@@ -3740,9 +5050,6 @@ const server = http.createServer((req, res) => {
   } else if (req.method === "POST" && req.url === "/discuss/control") {
     // Pause / resume / skip / end a live meeting. Mutates the shared ctrl object
     // the loop re-reads every turn — graceful (pause = don't start next turn).
-    // Owner-only — the human controls meetings, not an agent (which could otherwise
-    // silently end or stall a discussion). Same boundary as the other control routes.
-    if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
     readBody(req, (body) => {
       try {
         const { session, action } = JSON.parse(body);
@@ -3828,8 +5135,8 @@ const server = http.createServer((req, res) => {
         if (!reg.agents[id]) {
           if (staffCount() >= MAX_STAFF) {
             res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-            return res.end(`ออฟฟิศเต็มแล้ว — รับพนักงานได้สูงสุด ${MAX_STAFF} คน (ไม่นับ CEO). ` +
-              `งานขนานให้ใช้การแตกร่างผี (sub-agents) แทน`);
+            return res.end(`The office is full — you can hire up to ${MAX_STAFF} staff members (CEO not counted). ` +
+              `Use ghost split sub-agents for parallel work instead.`);
           }
         }
         const cur = reg.agents[id] || { skills: [], tools: [] };
@@ -3856,6 +5163,9 @@ const server = http.createServer((req, res) => {
           provider: (providers.PROVIDERS[p.provider] || (reg.providerConfig && reg.providerConfig[p.provider]))
             ? p.provider : (cur.provider || "claude"),
           model: String(p.model !== undefined ? p.model : (cur.model || "")).slice(0, 60),
+          runtime: p.runtime !== undefined
+            ? runtimeConfig.normalizeRuntime(p.runtime) || ""
+            : runtimeConfig.normalizeRuntime(cur.runtime) || "",
         };
         saveReg();
         pushRoster();
@@ -3882,6 +5192,28 @@ const server = http.createServer((req, res) => {
         pushRoster();
         res.writeHead(200);
         res.end("ok");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/registry/agent/order") {
+    if (!req.headers["x-bagidea-ui"]) { res.writeHead(403); return res.end("human UI only"); }
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body);
+        const ids = Array.isArray(p.ids) ? p.ids.map((id) => String(id || "").trim()).filter(Boolean) : [];
+        const movable = Object.keys(reg.agents || {}).filter((id) => id !== "ceo" && id !== "main");
+        const allowed = new Set(movable);
+        const orderedStaff = [...new Set(ids.filter((id) => allowed.has(id)))]
+          .concat(movable.filter((id) => !ids.includes(id)));
+        const fixed = ["ceo", "main"].filter((id) => reg.agents[id]);
+        reg.agentOrder = fixed.concat(orderedStaff);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, agentOrder: reg.agentOrder }));
       } catch (e) {
         res.writeHead(400);
         res.end(String(e.message));
@@ -4032,8 +5364,8 @@ const server = http.createServer((req, res) => {
                   maxRetries: 6, retryDelay: 350 });
               } catch (e) {
                 res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-                return res.end(`ลบไม่สำเร็จ — มีไฟล์ในโฟลเดอร์ถูกใช้งานอยู่ (${e.code || e.message}). ` +
-                  `ปิดโปรแกรม/เทอร์มินัลที่ค้างอยู่ในโฟลเดอร์นี้แล้วกด 🗑 อีกครั้ง`);
+                return res.end(`Delete failed — files in this folder are still in use (${e.code || e.message}). ` +
+                  `Close any program or terminal using this folder, then press 🗑 again.`);
               }
               projects = projects.filter((x) => x.id !== pid);
               saveProjects();
@@ -4076,8 +5408,8 @@ const server = http.createServer((req, res) => {
             // so macproj.sh sweep can identify it — mirrors the Windows
             // --suppressApplicationTitle approach.
             const cmd = psCmd || "";
-            // psCmd on Windows is `-Command "..."` — extract the inner command for macOS
-            const innerCmd = cmd.match(/-Command\s+"(.+)"/)?.[1] || "";
+            // psCmd is the Windows PowerShell command wrapper; extract its payload for macOS.
+            const innerCmd = powerShellCommandText(cmd);
             const shellCmd = innerCmd || "exec bash";
             // Extract marker (#BAGIDEA_PROJ_<id>) from the command, or fall
             // back to the title parameter the caller already passes.
@@ -4095,11 +5427,10 @@ end tell`;
             spawn("osascript", ["-e", script], { detached: true });
           } else {
             // Linux: open a terminal at `dir` running the command. The Windows psCmd is
-            // `-Command "<cmd> #marker"`; extract <cmd> (the #marker is also a bash
+            // Extract <cmd> from the Windows PowerShell wrapper (the #marker is also a bash
             // comment, so it's harmless). We don't track the window — winproj() is a
             // no-op on Linux, so hide/resume just don't apply.
-            const m = String(psCmd).match(/^-Command "([\s\S]*)"$/);
-            const inner = m ? m[1] : "";
+            const inner = powerShellCommandText(psCmd);
             const bashLine = `cd ${JSON.stringify(dir)}; ${inner ? inner + "; " : ""}exec bash`;
             const terms = [
               ["x-terminal-emulator", ["-e", "bash", "-lc", bashLine]],
@@ -4132,14 +5463,17 @@ end tell`;
           // also holds: an agent won't be dispatched into a project you have open.
           if ((projRuns[id] || 0) > 0) {
             res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
-            return res.end("agent กำลังทำงานในโปรเจคนี้อยู่ — กด ⏹ หยุดก่อนเพื่อเข้าไปดู/ทำเอง หรือรอจนงานเสร็จ");
+            return res.end("An agent is working in this project. Press ⏹ Stop before opening/taking over, or wait until the task finishes.");
           }
           ensureTrusted(dir);  // no trust dialog ambush in the new window
           // Smart entry: resume the NEWEST session explicitly — straight into
           // where the work happened. Fresh claude only when there's no session.
           const sid = newestSid(dir);
-          const cmd = sid ? `claude --resume ${sid}` : "claude";
-          launch(`-Command "${cmd} #BAGIDEA_PROJ_${id}"`, `BAGIDEA_PROJ_${id}`);
+          const cmd = claudeRuntime.claudeResumeCommand({ cwd: dir, sid });
+          const psCmd = process.platform === "win32" && claudeUseWsl()
+            ? wslClaudeLaunchPsCommand(dir, sid ? ["--resume", sid] : [])
+            : powerShellEncodedCommand(`${cmd} #BAGIDEA_PROJ_${id}`);
+          launch(psCmd, `BAGIDEA_PROJ_${id}`);
           setTimeout(sweepProjects, 2500);
         }
         res.writeHead(200); res.end("ok");
@@ -4519,7 +5853,7 @@ end tell`;
         const pc = reg.providerConfig[provider] || {};
         const spec = providers.PROVIDERS[provider];
         const kind = spec ? spec.format : pc.kind;   // "anthropic" | "openai"
-        if (!kind) return done(false, "ไม่รู้จัก provider นี้");
+        if (!kind) return done(false, "Unknown provider");
         const setConn = (ok, models) => {
           reg.providerConfig[provider] = reg.providerConfig[provider] || {};
           reg.providerConfig[provider].connected = ok;
@@ -4530,22 +5864,22 @@ end tell`;
         if (kind === "openai") {
           // OpenAI-compatible: GET /models validates the key + lists usable models.
           const { models: modelsUrl, key } = proxy.upstreamFor(provider, reg);
-          if (!modelsUrl) return done(false, "ไม่พบ endpoint");
-          if (!key) return done(false, "ยังไม่ได้วาง key");
+          if (!modelsUrl) return done(false, "Missing endpoint");
+          if (!key) return done(false, "Missing key");
           const r = await fetch(modelsUrl, { headers: { authorization: "Bearer " + key }, signal });
           if (r.ok) {
             let models = [];
             try { const j = await r.json(); captureModelCtx(provider, j.data); models = proxy.cleanModels((j.data || []).map((m) => m.id)).sort().slice(0, 120); } catch {}
             setConn(true, models);
-            return done(true, "เชื่อมต่อแล้ว ✓", models);
+            return done(true, "Connected ✓", models);
           }
           setConn(false);
-          return done(false, "key ไม่ผ่าน (HTTP " + r.status + ")");
+          return done(false, "Key rejected (HTTP " + r.status + ")");
         }
         // anthropic-compatible: a 1-token /v1/messages probe (401/403 = bad key).
         const base = pc.baseUrl || (spec && spec.baseUrl);
-        if (!base) return done(false, "ไม่พบ endpoint");
-        if (!pc.token) return done(false, "ยังไม่ได้วาง key");
+        if (!base) return done(false, "Missing endpoint");
+        if (!pc.token) return done(false, "Missing key");
         const model = pc.model || (spec && spec.models && spec.models.find(Boolean)) || "";
         const r = await fetch(base.replace(/\/+$/, "") + "/v1/messages", {
           method: "POST", signal,
@@ -4569,32 +5903,161 @@ end tell`;
           } catch {}
         }
         setConn(!authBad && !pathBad, models && models.length ? models : null);
-        if (pathBad) return done(false, "endpoint ไม่ถูก (HTTP " + r.status + ") — ถ้า baseUrl ลงท้ายด้วย /v1 ให้ตัดออก");
-        return done(!authBad, authBad ? "key ไม่ผ่าน (HTTP " + r.status + ")" : "เชื่อมต่อแล้ว ✓", models);
+        if (pathBad) return done(false, "Invalid endpoint (HTTP " + r.status + ") — if baseUrl ends with /v1, remove it");
+        return done(!authBad, authBad ? "Key rejected (HTTP " + r.status + ")" : "Connected ✓", models);
       } catch (e) { return done(false, String((e && e.message) || e)); }
     });
 
   } else if (req.method === "GET" && req.url === "/claude/auth") {
     // 🔓 Is Claude usable? Logged-in (credentials file / oauthAccount) OR API key set.
-    const home = require("os").homedir();
     let loggedIn = false;
-    try { loggedIn = fs.existsSync(path.join(home, ".claude", ".credentials.json")); } catch {}
-    if (!loggedIn) {
-      try { const j = JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8"));
-        loggedIn = !!(j && (j.oauthAccount || j.userID)); } catch {}
+    let cliOk = false, version = "", error = "";
+    const useWsl = claudeUseWsl();
+    const distro = claudeWslDistro();
+    try {
+      if (useWsl) {
+        const spec = claudeRuntime.claudeAuthCheckSpawnSpec({ useWsl, distro });
+        const out = require("child_process").execFileSync(spec.command, spec.args, {
+          timeout: 8000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        });
+        loggedIn = String(out || "").includes("logged-in");
+      } else {
+        const home = require("os").homedir();
+        try { loggedIn = fs.existsSync(path.join(home, ".claude", ".credentials.json")); } catch {}
+        if (!loggedIn) {
+          try { const j = JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8"));
+            loggedIn = !!(j && (j.oauthAccount || j.userID)); } catch {}
+        }
+      }
+    } catch (e) { error = String(e.message || e); }
+    try {
+      const spec = claudeRuntime.claudeVersionSpawnSpec({ useWsl, distro });
+      const out = require("child_process").execFileSync(spec.command, spec.args, {
+        timeout: 8000, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      });
+      version = claudeRuntime.parseVersionOutput(out);
+      cliOk = true;
+    } catch (e) {
+      if (!error) error = String(e.message || e);
     }
     const viaKey = !!(reg.apiKeys && reg.apiKeys.ANTHROPIC_API_KEY);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ loggedIn, viaKey, connected: loggedIn || viaKey }));
+    res.end(JSON.stringify({
+      loggedIn,
+      viaKey,
+      connected: (loggedIn || viaKey) && cliOk,
+      cliOk,
+      version,
+      useWsl,
+      distro,
+      command: useWsl ? "wsl.exe shell claude" : "claude",
+      error: error.slice(0, 500),
+    }));
+
+  } else if (req.method === "GET" && req.url === "/codex/status") {
+    // Codex owns its own auth/config. We only verify that the CLI reachable from
+    // this daemon can start; on Windows it may be bridged through WSL.
+    const { execFile } = require("child_process");
+    const useWsl = process.platform === "win32" && !!reg.codexUseWsl;
+    const distro = String(reg.codexWslDistro || "");
+    const spec = codexRuntime.codexVersionSpawnSpec({ useWsl, distro });
+    execFile(spec.command, spec.args, { timeout: 8000, windowsHide: true }, (e, out, err) => {
+      const version = codexRuntime.parseVersionOutput(out || err);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: !e,
+        connected: !e,
+        version,
+        useWsl,
+        distro,
+        command: useWsl ? "wsl.exe shell codex" : "codex",
+        error: e ? String(e.message || e).slice(0, 500) : "",
+      }));
+    });
+
+  } else if (req.method === "POST" && req.url === "/codex/config") {
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body || "{}");
+        reg.codexUseWsl = !!p.useWsl;
+        reg.codexWslDistro = String(p.distro || "").trim().slice(0, 80);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
+  } else if (req.method === "GET" && req.url === "/hermes/status") {
+    // Hermes owns its own auth/config. We only verify that the CLI reachable from
+    // this daemon can start; on Windows it may be bridged through WSL.
+    const { execFile } = require("child_process");
+    const useWsl = process.platform === "win32" && !!reg.hermesUseWsl;
+    const distro = String(reg.hermesWslDistro || "");
+    const spec = hermesRuntime.hermesVersionSpawnSpec({ useWsl, distro });
+    execFile(spec.command, spec.args, { timeout: 8000, windowsHide: true }, (e, out, err) => {
+      const version = hermesRuntime.parseVersionOutput(out || err);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: !e,
+        connected: !e,
+        version,
+        useWsl,
+        distro,
+        command: useWsl ? "wsl.exe shell hermes" : "hermes",
+        error: e ? String(e.message || e).slice(0, 500) : "",
+      }));
+    });
+
+  } else if (req.method === "POST" && req.url === "/hermes/config") {
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body || "{}");
+        reg.hermesUseWsl = !!p.useWsl;
+        reg.hermesWslDistro = String(p.distro || "").trim().slice(0, 80);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/claude/config") {
+    readBody(req, (body) => {
+      try {
+        const p = JSON.parse(body || "{}");
+        reg.claudeUseWsl = !!p.useWsl;
+        reg.claudeWslDistro = String(p.distro || "").trim().slice(0, 80);
+        saveReg();
+        pushRoster();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
 
   } else if (req.method === "POST" && req.url === "/claude/login") {
     // 🔓 Open a terminal running `claude` so the user completes browser OAuth login.
     try {
-      if (process.platform === "win32")
-        spawn("cmd", ["/c", "start", "Claude Login", "cmd", "/k", "claude"], { detached: true });
+      const cmd = claudeRuntime.claudeLoginCommand({
+        useWsl: claudeUseWsl(),
+        distro: claudeWslDistro(),
+      });
+      if (process.platform === "win32") {
+        const psCmd = claudeUseWsl() ? wslClaudeLaunchPsCommand(WORKSPACE, []) : powerShellEncodedCommand(cmd);
+        spawn("cmd", ["/c", "start", "Claude Login", "powershell", "-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", psCmd], { detached: true });
+      }
       else if (process.platform === "darwin")
-        spawn("osascript", ["-e", 'tell application "Terminal" to do script "claude"'], { detached: true });
-      else spawn("x-terminal-emulator", ["-e", "claude"], { detached: true });
+        spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(cmd)}`], { detached: true });
+      else spawn("x-terminal-emulator", ["-e", cmd], { detached: true });
       res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
     } catch (e) { res.writeHead(500); res.end(String(e.message)); }
 
@@ -4624,7 +6087,7 @@ end tell`;
     readBodyRaw(req, (buf) => {
       try {
         if (!buf.length) throw new Error("empty file");
-        if (buf.length > 80 * 1024 * 1024) throw new Error("ไฟล์ใหญ่เกิน 80MB");
+        if (buf.length > 80 * 1024 * 1024) throw new Error("File is larger than 80MB");
         const raw = decodeURIComponent(String(req.headers["x-file-name"] || "file.bin"));
         const safe = raw.replace(/[^\w.ก-๙ -]/g, "_").slice(-80);
         const dir = path.join(WORKSPACE, "uploads");
@@ -4837,7 +6300,7 @@ end tell`;
         let url = String(reqBody.url || "").trim();
         const mode = String(reqBody.mode || "");   // "" → ask on conflict · "overwrite" · "new"
         if (!/^https:\/\/(github\.com|gitlab\.com|[\w.-]+)\/[\w.\-/]+$/.test(url))
-          throw new Error("ใส่ลิงก์ git repo ที่ขึ้นต้น https:// ของ plugin");
+          throw new Error("Enter a plugin git repo link that starts with https://");
         if (!url.endsWith(".git")) url += ".git";
         // Clone into a temp folder first, then move it to plugins/<id> using
         // the id from its OWN manifest — so the install folder always matches
@@ -4849,17 +6312,17 @@ end tell`;
           const fail = (msg) => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
             res.writeHead(400, { "content-type": "text/plain; charset=utf-8" }); res.end(msg); };
           if (e || !fs.existsSync(path.join(tmp, "plugin.json")))
-            return fail(e ? "clone ไม่สำเร็จ: " + e.message : "repo นี้ไม่มี plugin.json — ไม่ใช่ plugin ที่ถูกต้อง");
+            return fail(e ? "Clone failed: " + e.message : "This repo has no plugin.json — it is not a valid plugin");
           let man = {}; try { man = JSON.parse(fs.readFileSync(path.join(tmp, "plugin.json"), "utf8")); } catch {}
           const repoName = url.split("/").pop().replace(/\.git$/, "");
           const id = String(man.id || repoName).replace(/[^\w-]/g, "");
-          if (!id) return fail("plugin.json ไม่มี id ที่ถูกต้อง");
+          if (!id) return fail("plugin.json has no valid id");
           let finalId = id;
           let dest = path.join(pluginsRoot, id);
           if (fs.existsSync(dest)) {
             if (mode === "overwrite") {
               try { fs.rmSync(dest, { recursive: true, force: true }); }
-              catch (err) { return fail("ลบตัวเดิมไม่สำเร็จ: " + err.message); }
+              catch (err) { return fail("Could not remove the existing plugin: " + err.message); }
             } else if (mode === "new") {
               // Install a SECOND copy under a free id (foo-2, foo-3…) and rewrite the
               // manifest id/name to match, so it's a genuinely distinct plugin.
@@ -4871,7 +6334,7 @@ end tell`;
                 man.id = finalId;
                 if (man.name) man.name = man.name + " (" + n + ")";
                 fs.writeFileSync(path.join(tmp, "plugin.json"), JSON.stringify(man, null, 2));
-              } catch (err) { return fail("ตั้งชื่อตัวใหม่ไม่สำเร็จ: " + err.message); }
+              } catch (err) { return fail("Could not name the new plugin copy: " + err.message); }
             } else {
               // No decision yet → let the UI ask the owner (overwrite vs new copy).
               try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
@@ -4879,7 +6342,7 @@ end tell`;
               return res.end(JSON.stringify({ exists: true, id }));
             }
           }
-          try { fs.renameSync(tmp, dest); } catch (err) { return fail("ติดตั้งไม่สำเร็จ: " + err.message); }
+          try { fs.renameSync(tmp, dest); } catch (err) { return fail("Install failed: " + err.message); }
           plugins.load();
           broadcast({ type: "plugins.changed" }, false);
           res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -4915,7 +6378,7 @@ end tell`;
         // Core plugins ship with the office and can't be uninstalled; only
         // plugins the user added (e.g. via GitHub) are removable.
         let man = {}; try { man = JSON.parse(fs.readFileSync(manFile, "utf8")); } catch {}
-        if (man.core) throw new Error("plugin หลักลบไม่ได้");
+        if (man.core) throw new Error("Core plugins cannot be removed");
         fs.rmSync(dir, { recursive: true, force: true });
         plugins.load();
         broadcast({ type: "plugins.changed" }, false);
@@ -5004,7 +6467,7 @@ end tell`;
         const { name } = JSON.parse(body);
         const val = (reg.apiKeys || {})[name];
         if (!val) { res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ ok: false, msg: "ยังไม่ได้ตั้ง key" })); }
+          return res.end(JSON.stringify({ ok: false, msg: "Key is not set" })); }
         const done = (ok, msg) => { res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
           res.end(JSON.stringify({ ok, msg })); };
         const https = require("https");
@@ -5012,7 +6475,7 @@ end tell`;
           const rq = https.request({ method: "GET", host: "api.openai.com", path: "/v1/models",
             headers: { authorization: "Bearer " + val } }, (rs) => {
             rs.resume();
-            done(rs.statusCode === 200, rs.statusCode === 200 ? "ใช้งานได้ ✓" : "key ไม่ผ่าน (HTTP " + rs.statusCode + ")");
+            done(rs.statusCode === 200, rs.statusCode === 200 ? "Works ✓" : "Key rejected (HTTP " + rs.statusCode + ")");
           });
           rq.setTimeout(12000, () => rq.destroy(new Error("timeout")));
           rq.on("error", (e) => done(false, e.message));
@@ -5021,12 +6484,12 @@ end tell`;
           const rq = https.request({ method: "GET", host: "generativelanguage.googleapis.com",
             path: "/v1beta/models?key=" + val }, (rs) => {
             rs.resume();
-            done(rs.statusCode === 200, rs.statusCode === 200 ? "ใช้งานได้ ✓" : "key ไม่ผ่าน (HTTP " + rs.statusCode + ")");
+            done(rs.statusCode === 200, rs.statusCode === 200 ? "Works ✓" : "Key rejected (HTTP " + rs.statusCode + ")");
           });
           rq.setTimeout(12000, () => rq.destroy(new Error("timeout")));
           rq.on("error", (e) => done(false, e.message));
           rq.end();
-        } else done(true, "ตั้งค่าแล้ว");
+        } else done(true, "Configured");
       } catch (e) { res.writeHead(400); res.end(String(e.message)); }
     });
 
@@ -5036,9 +6499,10 @@ end tell`;
 
   } else if (req.method === "GET" && req.url === "/version") {
     // Local vs latest-released version (the VERSION file on main).
+    const updates = updateChecksEnabled();
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ version: APP_VERSION, latest: latestVersion,
-      updateAvailable: semverGt(latestVersion, APP_VERSION) }));
+      updateChecks: updates, updateAvailable: updates && semverGt(latestVersion, APP_VERSION) }));
 
   } else if (req.method === "GET" && req.url === "/startup") {
     // Is the app set to launch with Windows? (HKCU Run key, same one the tray
@@ -5115,6 +6579,22 @@ end tell`;
       } catch { res.writeHead(400); res.end("bad json"); }
     });
 
+  } else if (req.method === "POST" && req.url === "/registry/updatechecks") {
+    readBody(req, (body) => {
+      try {
+        reg.updateChecks = !!JSON.parse(body).enabled;
+        if (!reg.updateChecks) {
+          latestVersion = APP_VERSION;
+          updateNotified = null;
+        }
+        saveReg();
+        pushRoster();
+        if (reg.updateChecks) setTimeout(checkUpdate, 1000);
+        res.writeHead(200);
+        res.end("ok");
+      } catch { res.writeHead(400); res.end("bad json"); }
+    });
+
   } else if (req.method === "POST" && req.url === "/registry/sound") {
     // World sound effects on/off (persisted + live ui.sound broadcast).
     readBody(req, (body) => {
@@ -5160,14 +6640,62 @@ end tell`;
       }
     });
 
+  } else if (req.method === "POST" && req.url === "/registry/runtime") {
+    readBody(req, (body) => {
+      try {
+        const rt = runtimeConfig.normalizeRuntime(JSON.parse(body).defaultRuntime) || "claude";
+        reg.defaultRuntime = rt;
+        saveReg();
+        pushRoster();
+        res.writeHead(200);
+        res.end("ok");
+      } catch (e) {
+        res.writeHead(400);
+        res.end(String(e.message));
+      }
+    });
+
   } else if (req.method === "POST" && req.url === "/registry/role") {
     readBody(req, (body) => {
       try {
-        const { name, remove } = JSON.parse(body);
+        const { name, remove, profile } = JSON.parse(body);
         const n = String(name || "").trim().slice(0, 40);
         if (!n) throw new Error("no name");
-        if (remove) reg.roles = reg.roles.filter((r) => r !== n);
-        else if (!reg.roles.includes(n)) reg.roles.push(n);
+        reg.roleProfiles = reg.roleProfiles || {};
+        if (remove) {
+          reg.roles = reg.roles.filter((r) => r !== n);
+          delete reg.roleProfiles[n];
+        } else {
+          if (!reg.roles.includes(n)) reg.roles.push(n);
+          const cur = reg.roleProfiles[n] || {};
+          const incoming = profile && typeof profile === "object" ? profile : {};
+          const keepText = (key, max) => incoming[key] !== undefined
+            ? String(incoming[key]).slice(0, max)
+            : (cur[key] || "");
+          const seedSource = incoming.personaSeed !== undefined
+            ? incoming.personaSeed
+            : (cur.personaSeed || cur.prompt || cur.summary || "");
+          reg.roleProfiles[n] = {
+            ...cur,
+            name: keepText("name", 60) || cur.name || n,
+            title: keepText("title", 80) || cur.title || n,
+            summary: keepText("summary", 1000),
+            prompt: keepText("prompt", 24000),
+            expertise: keepText("expertise", 2000),
+            style: keepText("style", 2000),
+            rules: keepText("rules", 4000),
+            runtime: runtimeConfig.normalizeRuntime(
+              incoming.runtime !== undefined ? incoming.runtime : cur.runtime) || "",
+            tier: incoming.tier !== undefined
+              ? Math.min(Math.max(Number(incoming.tier) || 3, 1), 3)
+              : cur.tier,
+            skills: Array.isArray(incoming.skills)
+              ? incoming.skills.filter((s) => reg.skills[s])
+              : (cur.skills || []),
+            tools: Array.isArray(incoming.tools) ? incoming.tools : (cur.tools || []),
+            personaSeed: String(seedSource).slice(0, 2000),
+          };
+        }
         saveReg();
         pushRoster();
         res.writeHead(200);
@@ -5184,7 +6712,7 @@ end tell`;
     // AND picks the skills + tools that fit the role from what's available.
     readBody(req, async (body) => {
       try {
-        const { name = "Agent", role = "Specialist", brief = "" } = JSON.parse(body);
+        const { name = "Agent", role = "Specialist", brief = "", lang = "" } = JSON.parse(body);
         const skillMenu = Object.entries(reg.skills)
           .map(([id, s]) => `  ${id}: ${s.description || s.name || id}`).join("\n");
         const toolMenu = Object.entries(BUILTIN_TOOLS)
@@ -5194,25 +6722,14 @@ end tell`;
         // Draft with the Director's (main agent's) brain — predictable, and it
         // works for an office with no Claude key (whatever provider the Director runs).
         const director = (reg.agents || {}).main;
-        const draft = await claudeText(
-          `Design a complete persona for an AI agent in a software office, and ` +
-          `pick the skills + tools that fit its job.\n` +
-          `Agent name: ${name}\nJob title: ${role}\nOwner's brief: ${brief}\n\n` +
-          `Available SKILLS (pick by id, only ones that truly fit the role):\n${skillMenu}\n\n` +
-          `Available TOOLS (pick by exact name, only what the job needs — fewer is better; ` +
-          `a manager/coordinator needs very few, a builder needs more):\n${toolMenu}\n\n` +
-          `Output STRICT JSON only (no markdown fences):\n` +
-          `{"prompt":"core mission & identity, second person, 3-6 sentences",` +
-          `"expertise":"bullet-ish lines: concrete skills, tools, domains they own",` +
-          `"personality":"tone of voice, character quirks, how they talk",` +
-          `"language":"primary reply language, e.g. ไทย / English / ตามผู้ใช้",` +
-          `"rules":"3-6 imperative work rules (do/don't), one per line",` +
-          `"skills":["skill-id", ...],` +
-          `"tools":["ToolName", ...]}\n` +
-          `Every field must genuinely reflect the brief. skills/tools MUST be chosen ` +
-          `ONLY from the lists above (exact ids/names). Match the brief's language ` +
-          `(Thai brief → Thai text fields; skill ids and tool names stay verbatim).`,
-          { provider: director && director.provider, model: director && director.model });
+        const draft = await claudeText(personaDraft.buildPersonaDraftPrompt({
+          name,
+          role,
+          brief,
+          lang,
+          skillMenu,
+          toolMenu,
+        }), { provider: director && director.provider, model: director && director.model });
         let out = { prompt: draft };
         const m = draft.match(/\{[\s\S]*\}/);
         if (m) try { out = JSON.parse(m[0]); } catch {}
@@ -5240,6 +6757,80 @@ end tell`;
         broadcast({ type: "ui.daylight", hour }, false);
         res.writeHead(200);
         res.end("ok");
+      } catch {
+        res.writeHead(400);
+        res.end("bad json");
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/ui/season") {
+    // Lightweight season phase: actual season = (two-hour slot + offset) % 4.
+    // This keeps the "auto changes every two hours" behavior while letting the map
+    // button nudge the current visual season immediately.
+    readBody(req, (body) => {
+      try {
+        const a = JSON.parse(body || "{}");
+        const seasons = ["spring", "summer", "autumn", "winter"];
+        let offset = Number(reg.seasonOffset || 0);
+        if (Number.isFinite(Number(a.offset))) offset = Number(a.offset);
+        else offset += Number(a.step || 1);
+        offset = ((Math.trunc(offset) % seasons.length) + seasons.length) % seasons.length;
+        reg.seasonOffset = offset;
+        saveReg();
+        const season = seasons[(Math.floor(new Date().getHours() / 2) + offset) % seasons.length];
+        broadcast({ type: "ui.season", offset, season }, false);
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, offset, season }));
+      } catch {
+        res.writeHead(400);
+        res.end("bad json");
+      }
+    });
+
+  } else if (req.method === "POST" && req.url === "/ui/weather") {
+    readBody(req, (body) => {
+      try {
+        const a = JSON.parse(body || "{}");
+        const seasons = ["spring", "summer", "autumn", "winter"];
+        const weatherBySeason = {
+          spring: ["sunny", "light_rain"],
+          summer: ["sunny", "light_rain", "storm"],
+          autumn: ["sunny", "light_rain"],
+          winter: ["sunny", "snow"],
+        };
+        const autoWeatherBySeason = {
+          spring: [
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+          ],
+          summer: [
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "storm",
+          ],
+          autumn: [
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny",
+            "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "sunny", "light_rain", "light_rain", "light_rain",
+          ],
+          winter: ["sunny", "sunny", "sunny", "snow"],
+        };
+        const now = new Date();
+        const season = seasons[(Math.floor(now.getHours() / 2) + Number(reg.seasonOffset || 0)) % seasons.length];
+        const opts = weatherBySeason[season] || weatherBySeason.spring;
+        const autoOpts = autoWeatherBySeason[season] || opts;
+        const slot = Math.floor(now.getTime() / 3600000);
+        let offset = Number(reg.weatherOffset || 0);
+        if (Number.isFinite(Number(a.offset))) offset = Number(a.offset);
+        else offset += Number(a.step || 1);
+        offset = ((Math.trunc(offset) % opts.length) + opts.length) % opts.length;
+        reg.weatherOffset = offset;
+        saveReg();
+        const base = Math.abs(Math.imul(slot ^ (season.length * 131), 1103515245) + 12345);
+        const baseWeather = autoOpts[base % autoOpts.length];
+        const baseIx = Math.max(0, opts.indexOf(baseWeather));
+        const weather = offset === 0 ? baseWeather : opts[(baseIx + offset) % opts.length];
+        broadcast({ type: "ui.weather", offset, season, weather }, false);
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, offset, season, weather }));
       } catch {
         res.writeHead(400);
         res.end("bad json");
@@ -5343,11 +6934,11 @@ end tell`;
       const w = JSON.parse(body || "{}");
       queueDirectorTurn((release) => {
         runClaude("main", WORKFLOW_ANALYZE_PROMPT + "\n\n" + workflowToText(w), {
-          logPrompt: "🔀 วิเคราะห์ workflow: " + (w.name || ""),
+          logPrompt: "🔀 Analyze workflow: " + (w.name || ""),
           onDone: (out, ok) => {
             release();
             res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify({ ok: !!ok, analysis: ok && out ? out : "วิเคราะห์ไม่สำเร็จ ลองใหม่อีกครั้ง" }));
+            res.end(JSON.stringify({ ok: !!ok, analysis: ok && out ? out : "Analysis failed. Please try again." }));
           },
         });
       });
@@ -5365,7 +6956,7 @@ end tell`;
           `Reply with ONLY a JSON object, no prose: ` +
           `{"name":"<short title>","steps":["<step 1>","<step 2>", ...]}. ` +
           `3–8 short imperative steps in order, in the language of the goal.`,
-          { noSub: true, logPrompt: "🪄 ร่าง workflow: " + goal.slice(0, 40),
+          { noSub: true, logPrompt: "🪄 Draft workflow: " + goal.slice(0, 40),
             onDone: (out, ok) => {
               release();
               let wf = null;
@@ -5402,11 +6993,11 @@ end tell`;
           "waits for all branches, then continues from their merged results. Report the " +
           "final result.\n\n" + workflowToText(w),
           undefined, undefined,
-          { logPrompt: "🔀▶ รัน workflow: " + (w.name || ""),
+          { logPrompt: "🔀▶ Run workflow: " + (w.name || ""),
             onDone: (out, ok) => {
               release();
               res.writeHead(200, { "content-type": "application/json" });
-              res.end(JSON.stringify({ ok: !!ok, result: ok && out ? out : "รันไม่สำเร็จ ลองใหม่อีกครั้ง" }));
+              res.end(JSON.stringify({ ok: !!ok, result: ok && out ? out : "Run failed. Please try again." }));
             } });
       });
     } catch (e) { res.writeHead(400); res.end(String(e.message)); } });
@@ -5591,14 +7182,14 @@ end tell`;
               `จัดทีมเลย: DELEGATE: <agent> @ ${p.name} :: <งานชิ้นแรกที่ชัดเจน> ` +
               `ให้คนที่เสนอไอเดียได้ทำเป็นหลัก แล้วสรุปแผนสั้นๆ` +
               (note ? ` และนำข้อความของเจ้าของไปปรับทิศทางงานด้วย` : ""),
-              { logPrompt: `✅ อนุมัติข้อเสนอ: ${p.name}`,
+              { logPrompt: `✅ Approved proposal: ${p.name}`,
                 filterText: makeDelegateFilter(0, undefined),
                 onDone: () => release() });
           });
         } else if (decision === "reject" && note) {
           // The team hears WHY — the owner's note lands in the office feed.
           broadcast({ type: "chat.message", agent: "main",
-            text: `CEO ยังไม่อนุมัติ "${p.name}" — ${note}` });
+            text: `CEO has not approved "${p.name}" yet — ${note}` });
         }
         broadcast({ type: "proposal." + p.status, agent: p.by, name: p.name, proposal: p.id });
         res.writeHead(200); res.end("ok");
@@ -5742,7 +7333,7 @@ end tell`;
       try {
         const { text, preset, agent, intro } = JSON.parse(body);
         const pid = preset || (reg.agents[agent] && reg.agents[agent].voice);
-        if (!pid) throw new Error("agent นี้ยังไม่ได้ตั้งเสียง");
+        if (!pid) throw new Error("This agent has no voice set");
         const say = intro ? voiceIntro(pid, reg.lang || "en") : text;
         if (!say) throw new Error("no text");
         ttsSpeak(pid, say).then((wav) => {
@@ -5770,11 +7361,11 @@ end tell`;
     readBodyRaw(req, (buf) => {
       if (!buf || buf.length < 4000) {
         res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-        return res.end("เสียงสั้นเกินไป — กดค้างแล้วพูดให้จบก่อนปล่อย");
+        return res.end("Audio is too short — hold the button, finish speaking, then release.");
       }
       if (buf.length > 24 * 1024 * 1024) {
         res.writeHead(413, { "content-type": "text/plain; charset=utf-8" });
-        return res.end("คลิปยาวเกินไป (จำกัด ~60 วินาที)");
+        return res.end("Audio clip is too long (limit ~60 seconds).");
       }
       voiceTranscribe(buf).then((text) => {
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -5798,14 +7389,16 @@ end tell`;
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps],
         { detached: true, stdio: "ignore", windowsHide: false }).unref();
     } else if (process.platform === "darwin") {
-      // macOS: git pull + rebuild in a visible Terminal window
+      // macOS: run the full updater in a visible Terminal window.
       const root = path.join(__dirname, "..");
-      const script = `tell application "Terminal" to do script "cd '${root}' && git pull && ./build-mac.sh"`;
+      const sh = path.join(root, "installer", "update-mac.sh");
+      const cmd = `cd ${shellQuote(root)} && bash ${shellQuote(sh)}`;
+      const script = `tell application "Terminal" to do script "${appleScriptString(cmd)}"`;
       spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" }).unref();
     } else {
       // Linux: same idea, x-terminal-emulator
       const root = path.join(__dirname, "..");
-      spawn("x-terminal-emulator", ["-e", `cd '${root}' && git pull && bash build-mac.sh`],
+      spawn("x-terminal-emulator", ["-e", `cd ${shellQuote(root)} && git pull && bash build-mac.sh`],
         { detached: true, stdio: "ignore" }).unref();
     }
     res.writeHead(200); res.end("ok");
@@ -5904,7 +7497,7 @@ function handleLive(req, sock) {
     "Connection: Upgrade\r\nSec-WebSocket-Accept: " + wsAccept(key) + "\r\n\r\n");
   const toClient = (obj) => { try { sock.write(wsFrame(JSON.stringify(obj))); } catch {} };
   const gm = (reg.apiKeys || {}).GEMINI_API_KEY;
-  if (!gm) { toClient({ type: "error", text: "ต้องมี GEMINI_API_KEY (⚙ CONNECT) สำหรับ realtime" }); return; }
+  if (!gm) { toClient({ type: "error", text: "GEMINI_API_KEY is required in ⚙ CONNECT for realtime." }); return; }
 
   // Calling is for the MAIN agent only — it speaks for the whole office. Use the
   // voice the owner assigned to main; if none, fall back to a default preset.
@@ -5928,8 +7521,8 @@ function handleLive(req, sock) {
     if (callEnded || !callStart) return;
     callEnded = true;
     const s = Math.round((Date.now() - callStart) / 1000);
-    const dur = s >= 60 ? `${Math.floor(s / 60)} นาที ${s % 60} วิ` : `${s} วิ`;
-    logCall(`📞 คุยสายเสียงกับ ${a.name || "ผู้ช่วย"} · ${callStartStr} · นาน ${dur}`);
+    const dur = s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} sec` : `${s} sec`;
+    logCall(`📞 Voice call with ${a.name || "assistant"} · ${callStartStr} · duration ${dur}`);
   };
 
   const gemini = require("./channels").wsConnect(
@@ -6058,6 +7651,9 @@ try { wireWorkspaceSettings(WORKSPACE, __dirname); }
 catch (e) { console.error("[startup] wireWorkspaceSettings failed:", e && e.message); }
 server.listen(OEP_PORT, "127.0.0.1", () => {
   console.log(`[oep] http+ws listening :${OEP_PORT}`);
+  // Windows wallpaper ownership lives in the shell. The PowerShell repin
+  // watcher was a fallback, but on some Explorer layouts it becomes a full
+  // desktop overlay and visually covers icons/windows.
   // Fresh boot ⇒ nothing is running (runChildren starts empty). A task.started left
   // dangling in the journal by the previous (killed) run would otherwise REPLAY on the
   // next client connect and pin agents as "working" forever. Journal a reset so it

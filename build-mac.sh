@@ -28,7 +28,13 @@ fi
 # Falls back to a source build on any miss (offline, fork without releases, asset
 # not uploaded yet). Force a source build with BAGIDEA_NO_PREBUILT=1.
 PREBUILT=0
-if [ -z "$BAGIDEA_NO_PREBUILT" ]; then
+PREBUILT_ALLOWED=1
+BRANCH=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ]; then
+  PREBUILT_ALLOWED=0
+  echo "    - development branch '$BRANCH': building shell from source instead of using release prebuilts"
+fi
+if [ -z "$BAGIDEA_NO_PREBUILT" ] && [ "$PREBUILT_ALLOWED" = "1" ]; then
   SLUG=$(git -C "$ROOT" remote get-url origin 2>/dev/null | sed -nE 's#.*github\.com[:/]+([^/]+)/([^/.]+).*#\1/\2#p')
   VER=$(head -n1 "$ROOT/VERSION" 2>/dev/null | tr -d ' \r\n')
   if [ -n "$SLUG" ] && [ -n "$VER" ]; then

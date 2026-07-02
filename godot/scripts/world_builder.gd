@@ -112,6 +112,18 @@ var _ghost_deck: Node3D     # the floating sub-ops platform (movable from the ed
 var _billboard_logo: MeshInstance3D   # the brand sign face (user can swap its image)
 var _billboard_pending := ""          # billboard image requested before the sign was built
 const GRID_SCRIPT := preload("res://scripts/grid_world.gd")
+const WildlifeScript := preload("res://scripts/wildlife_sprite.gd")
+var _season_name := ""
+var _weather_name := "sunny"
+var _season_ground_mat: StandardMaterial3D
+var _season_grass_mat: ShaderMaterial
+var _season_leaf_mats: Array[StandardMaterial3D] = []
+var _season_mountain_mats: Array[StandardMaterial3D] = []
+var _season_tree_spots: Array = []
+var _season_mountain_spots: Array = []
+var _season_fx_root: Node3D
+var _weather_fx_root: Node3D
+var _wildlife_root: Node3D
 # The rec TV: LOCAL position of Large_Monitor_White in its cell (mirrors
 # grid_world's `nw` for "rec"), and the screen-centre offset from that base.
 # Used to park the TV glow on the live monitor so it tracks room swaps.
@@ -294,7 +306,29 @@ func _env(model: String, pos: Vector3, rot_y := 0.0, s := 1.0) -> Node3D:
 	inst.position = pos
 	inst.rotation_degrees = Vector3(0, rot_y, 0)
 	inst.scale = Vector3.ONE * s
+	_collect_env_season_mats(inst, model)
 	return inst
+
+func _collect_env_season_mats(inst: Node, model: String) -> void:
+	if inst == null:
+		return
+	if model.begins_with("Tree_") or model.begins_with("Bush_") or model.begins_with("Grass_"):
+		_collect_standard_mats(inst, _season_leaf_mats)
+	elif model.begins_with("Mounting_"):
+		_collect_standard_mats(inst, _season_mountain_mats)
+
+func _collect_standard_mats(node: Node, bucket: Array[StandardMaterial3D]) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh:
+			for i in mi.mesh.get_surface_count():
+				var src := mi.get_active_material(i)
+				if src is StandardMaterial3D:
+					var dup: StandardMaterial3D = src.duplicate()
+					mi.set_surface_override_material(i, dup)
+					bucket.append(dup)
+	for c in node.get_children():
+		_collect_standard_mats(c, bucket)
 
 func _kit_scaled(model: String, pos: Vector3, rot_y: float, s: Vector3) -> Node3D:
 	if not _glb_cache.has(model):
@@ -617,6 +651,7 @@ const BirdScript := preload("res://scripts/bird_sprite.gd")
 
 ## Soft clouds drifting across the sky forever + occasional bird flocks.
 func _build_sky_life() -> void:
+	return
 	# Cartoon clouds (opaque puffy clusters, flat-ish base — the Zelda look).
 	# Shaded so the day cycle lights them, plus a soft emission floor that
 	# keeps the undersides fluffy instead of hard-shadowed plastic balls.
@@ -726,8 +761,9 @@ func _bird_loop() -> void:
 
 var pollen: GPUParticles3D
 var fireflies: GPUParticles3D
+var _night_life := false
 
-## Daytime pollen motes over the meadow; fireflies take the night shift.
+## Daytime pollen motes over the meadow; summer fireflies take dusk/night.
 func _build_ambient_particles() -> void:
 	var soft := StandardMaterial3D.new()
 	soft.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -764,7 +800,7 @@ func _build_ambient_particles() -> void:
 
 	var fpp := ParticleProcessMaterial.new()
 	fpp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	fpp.emission_box_extents = Vector3(14.0, 0.9, 10.0)
+	fpp.emission_box_extents = Vector3(24.0, 1.1, 17.0)
 	fpp.gravity = Vector3.ZERO
 	fpp.initial_velocity_min = 0.15
 	fpp.initial_velocity_max = 0.5
@@ -784,9 +820,9 @@ func _build_ambient_particles() -> void:
 	glow.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	glow.emission_enabled = true
 	glow.emission = Color(0.5, 1.0, 0.35)
-	glow.emission_energy_multiplier = 2.2
+	glow.emission_energy_multiplier = 2.8
 	fireflies = GPUParticles3D.new()
-	fireflies.amount = 26
+	fireflies.amount = 54
 	fireflies.lifetime = 7.0
 	fireflies.preprocess = 7.0
 	fireflies.process_material = fpp
@@ -794,22 +830,26 @@ func _build_ambient_particles() -> void:
 	fq.size = Vector2(0.06, 0.06)
 	fq.material = glow
 	fireflies.draw_pass_1 = fq
-	fireflies.position = Vector3(-2.0, 1.0, 9.0)  # over the south meadow
+	fireflies.position = Vector3(2.5, 1.05, 4.5)  # over the lawn around the office
 	fireflies.layers = 2
 	fireflies.emitting = false
 	add_child(fireflies)
 
-## Day cycle hands over the shift: pollen by day, fireflies by night.
+## Day cycle hands over the shift: pollen by day, summer fireflies by dusk/night.
 func set_night_life(night: bool) -> void:
+	_night_life = night
 	if pollen:
 		pollen.emitting = not night
-	if fireflies:
-		fireflies.emitting = night
+	_update_fireflies()
 	# Garden lamps wake with the dark — the lawn never goes pitch black.
 	for l in _lamp_lights:
 		l.visible = night
 	for m in _lamp_heads:
 		m.emission_energy_multiplier = 2.6 if night else 0.0
+
+func _update_fireflies() -> void:
+	if fireflies:
+		fireflies.emitting = _night_life and _season_name == "summer"
 
 ## Cozy lamp posts around the building (night dressing for the lawn).
 func _build_garden_lamps() -> void:
@@ -951,6 +991,273 @@ func update_clock(text: String, phase: String) -> void:
 		_icon_night.visible = phase == "night"
 	if _icon_dusk:
 		_icon_dusk.visible = phase in ["dawn", "dusk"]
+
+func apply_season(season: String, force := false) -> void:
+	var s := season.to_lower()
+	if not (s in ["spring", "summer", "autumn", "winter"]):
+		s = "spring"
+	if not force and s == _season_name:
+		return
+	_season_name = s
+	var ground := Color(0.15, 0.34, 0.13)
+	var grass_base := Color(0.14, 0.34, 0.12)
+	var grass_tip := Color(0.42, 0.66, 0.22)
+	var leaf := Color(0.12, 0.32, 0.12)
+	var mountain := Color(0.32, 0.4, 0.45)
+	match s:
+		"spring":
+			ground = Color(0.16, 0.42, 0.18)
+			grass_base = Color(0.16, 0.42, 0.16); grass_tip = Color(0.56, 0.78, 0.28)
+			leaf = Color(0.18, 0.45, 0.18)
+			mountain = Color(0.36, 0.46, 0.42)
+		"summer":
+			ground = Color(0.12, 0.36, 0.12)
+			grass_base = Color(0.12, 0.36, 0.1); grass_tip = Color(0.5, 0.72, 0.2)
+			leaf = Color(0.1, 0.34, 0.1)
+			mountain = Color(0.3, 0.42, 0.4)
+		"autumn":
+			ground = Color(0.32, 0.26, 0.1)
+			grass_base = Color(0.36, 0.29, 0.09); grass_tip = Color(0.78, 0.52, 0.16)
+			leaf = Color(0.78, 0.34, 0.08)
+			mountain = Color(0.46, 0.36, 0.28)
+		"winter":
+			ground = Color(0.72, 0.82, 0.88)
+			grass_base = Color(0.55, 0.64, 0.62); grass_tip = Color(0.82, 0.9, 0.9)
+			leaf = Color(0.52, 0.62, 0.58)
+			mountain = Color(0.72, 0.78, 0.82)
+	if _season_ground_mat:
+		_season_ground_mat.albedo_color = ground
+	if _season_grass_mat:
+		_season_grass_mat.set_shader_parameter("base_col", Vector3(grass_base.r, grass_base.g, grass_base.b))
+		_season_grass_mat.set_shader_parameter("tip_col", Vector3(grass_tip.r, grass_tip.g, grass_tip.b))
+	for mat in _season_leaf_mats:
+		if mat:
+			mat.albedo_color = leaf
+	for mat in _season_mountain_mats:
+		if mat:
+			mat.albedo_color = mountain
+	_set_season_fx(s)
+	_update_fireflies()
+	_refresh_wildlife()
+
+func _set_season_fx(season: String) -> void:
+	if is_instance_valid(_season_fx_root):
+		_season_fx_root.queue_free()
+	_season_fx_root = Node3D.new()
+	_season_fx_root.name = "SeasonFX"
+	add_child(_season_fx_root)
+	match season:
+		"spring":
+			_add_season_particles(Color(1.0, 0.62, 0.82, 0.62), 38, Vector3(0, -0.08, 0),
+				Vector2(0.06, 0.035), 0.55)
+		"autumn":
+			_add_season_particles(Color(0.95, 0.45, 0.12, 0.72), 46, Vector3(0.05, -0.18, 0.02),
+				Vector2(0.075, 0.04), 0.85)
+		"winter":
+			_add_winter_snow_layers()
+
+func apply_weather(weather: String, season := "") -> void:
+	_weather_name = weather.to_lower()
+	if is_instance_valid(_weather_fx_root):
+		_weather_fx_root.queue_free()
+	_weather_fx_root = Node3D.new()
+	_weather_fx_root.name = "WeatherFX"
+	add_child(_weather_fx_root)
+	match _weather_name:
+		"light_rain":
+			_add_weather_particles(Color(0.58, 0.72, 1.0, 0.62), 520, Vector3(0.12, -9.0, 0.0),
+				Vector2(0.014, 0.34), 12.0, 18.0, 0.95)
+		"storm":
+			_add_weather_particles(Color(0.62, 0.78, 1.0, 0.82), 1800, Vector3(0.35, -16.0, 0.0),
+				Vector2(0.018, 0.58), 22.0, 34.0, 0.62)
+		"snow":
+			_add_weather_particles(Color(0.94, 0.98, 1.0, 0.82), 170, Vector3(0.04, -0.14, 0.0),
+				Vector2(0.045, 0.045), 0.35, 0.9, 8.5)
+	_refresh_wildlife()
+
+func _refresh_wildlife() -> void:
+	if is_instance_valid(_wildlife_root):
+		_wildlife_root.queue_free()
+	_wildlife_root = Node3D.new()
+	_wildlife_root.name = "Wildlife"
+	add_child(_wildlife_root)
+	for spec in _wildlife_specs(_season_name, _weather_name):
+		_spawn_wildlife(spec)
+
+func _wildlife_specs(season: String, weather: String) -> Array:
+	match weather:
+		"storm":
+			if season == "summer":
+				return [
+					{"species": "frog", "pos": Vector3(-21.0, 0.16, 17.5), "roam": Vector2(1.0, 0.8), "speed": 0.45},
+				]
+			return [
+				{"species": "crow", "pos": Vector3(24.0, 0.18, -16.5), "roam": Vector2(1.2, 0.5), "speed": 0.55},
+			]
+		"light_rain":
+			match season:
+				"spring":
+					return [
+						{"species": "frog", "pos": Vector3(-21.5, 0.16, 17.5), "roam": Vector2(1.2, 0.8), "speed": 0.5},
+						{"species": "duck", "pos": Vector3(22.0, 0.18, 16.8), "roam": Vector2(1.4, 0.8), "speed": 0.42},
+					]
+				"summer":
+					return [
+						{"species": "frog", "pos": Vector3(-21.5, 0.16, 17.5), "roam": Vector2(1.2, 0.8), "speed": 0.5},
+						{"species": "duck", "pos": Vector3(22.0, 0.18, 16.8), "roam": Vector2(1.4, 0.8), "speed": 0.42},
+						{"species": "butterfly", "pos": Vector3(-24.0, 0.75, 7.0), "roam": Vector2(1.4, 0.8), "speed": 0.75},
+					]
+				"autumn":
+					return [
+						{"species": "squirrel", "pos": Vector3(-24.0, 0.18, 4.8), "roam": Vector2(1.0, 0.7), "speed": 0.65},
+						{"species": "crow", "pos": Vector3(25.0, 0.18, -15.0), "roam": Vector2(1.2, 0.5), "speed": 0.55},
+					]
+				_:
+					return [
+						{"species": "snowbird", "pos": Vector3(-23.0, 0.65, -15.0), "roam": Vector2(1.2, 0.6), "speed": 0.6},
+					]
+		"snow":
+			return [
+				{"species": "snowrabbit", "pos": Vector3(-20.5, 0.18, 18.5), "roam": Vector2(1.1, 0.8), "speed": 0.42},
+				{"species": "snowbird", "pos": Vector3(24.0, 0.75, -16.0), "roam": Vector2(1.4, 0.7), "speed": 0.65},
+				{"species": "deer", "pos": Vector3(29.0, 0.18, 23.0), "roam": Vector2(1.5, 0.9), "speed": 0.38},
+			]
+	match season:
+		"spring":
+			return [
+				{"species": "rabbit", "pos": Vector3(-20.5, 0.18, 18.5), "roam": Vector2(1.5, 0.9), "speed": 0.62},
+				{"species": "butterfly", "pos": Vector3(-24.0, 0.85, 7.0), "roam": Vector2(1.6, 0.9), "speed": 0.82},
+				{"species": "duck", "pos": Vector3(22.0, 0.18, 16.8), "roam": Vector2(1.3, 0.8), "speed": 0.45},
+			]
+		"summer":
+			return [
+				{"species": "butterfly", "pos": Vector3(-24.0, 0.85, 7.0), "roam": Vector2(1.8, 1.0), "speed": 0.85},
+				{"species": "frog", "pos": Vector3(-21.5, 0.16, 17.5), "roam": Vector2(1.2, 0.8), "speed": 0.5},
+				{"species": "rabbit", "pos": Vector3(21.5, 0.18, 20.5), "roam": Vector2(1.5, 0.9), "speed": 0.62},
+			]
+		"autumn":
+			return [
+				{"species": "squirrel", "pos": Vector3(-24.0, 0.18, 4.8), "roam": Vector2(1.0, 0.7), "speed": 0.65},
+				{"species": "fox", "pos": Vector3(29.0, 0.18, 20.5), "roam": Vector2(1.6, 0.8), "speed": 0.55},
+				{"species": "crow", "pos": Vector3(25.0, 0.18, -15.0), "roam": Vector2(1.3, 0.5), "speed": 0.55},
+			]
+		"winter":
+			return [
+				{"species": "snowrabbit", "pos": Vector3(-20.5, 0.18, 18.5), "roam": Vector2(1.1, 0.8), "speed": 0.42},
+				{"species": "snowbird", "pos": Vector3(24.0, 0.75, -16.0), "roam": Vector2(1.4, 0.7), "speed": 0.65},
+				{"species": "deer", "pos": Vector3(29.0, 0.18, 23.0), "roam": Vector2(1.5, 0.9), "speed": 0.38},
+			]
+	return []
+
+func _spawn_wildlife(spec: Dictionary) -> void:
+	var animal := Sprite3D.new()
+	animal.set_script(WildlifeScript)
+	animal.setup(str(spec.get("species", "rabbit")),
+		spec.get("roam", Vector2(1.4, 0.8)),
+		float(spec.get("speed", 0.6)))
+	animal.position = spec.get("pos", Vector3.ZERO)
+	_wildlife_root.add_child(animal)
+
+func _add_weather_particles(color: Color, amount: int, gravity: Vector3, size: Vector2,
+		vel_min: float, vel_max: float, lifetime: float) -> void:
+	var p := GPUParticles3D.new()
+	p.amount = amount
+	p.lifetime = lifetime
+	p.preprocess = lifetime
+	p.visibility_aabb = AABB(Vector3(-30, -4, -22), Vector3(66, 18, 52))
+	p.layers = 2
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(28, 2.0, 20)
+	pm.direction = Vector3(0, -1, 0)
+	pm.spread = 8.0 if vel_min > 4.0 else 32.0
+	pm.gravity = gravity
+	pm.initial_velocity_min = vel_min
+	pm.initial_velocity_max = vel_max
+	pm.scale_min = 0.75
+	pm.scale_max = 1.35
+	p.process_material = pm
+	var q := QuadMesh.new()
+	q.size = size
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	q.material = mat
+	p.draw_pass_1 = q
+	p.position = Vector3(3.0, 7.5, 1.0)
+	_weather_fx_root.add_child(p)
+
+func _add_winter_snow_layers() -> void:
+	var snow_mat := _mat(Color(0.98, 1.0, 1.0), 0.96, Color(0.85, 0.94, 1.0), 0.42)
+	snow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+
+	for patch in [
+		[Vector3(3, 0.035, -30.25), Vector3(110, 0.08, 33.5)],
+		[Vector3(3, 0.035, 28.25), Vector3(110, 0.08, 29.5)],
+		[Vector3(-34.75, 0.035, 0), Vector3(34.5, 0.08, 27.0)],
+		[Vector3(37.75, 0.035, 0), Vector3(40.5, 0.08, 27.0)],
+		[Vector3(3, 0.045, -12.68), Vector3(33.8, 0.09, 1.05)],
+		[Vector3(3, 0.045, 12.68), Vector3(33.8, 0.09, 1.05)],
+		[Vector3(-16.42, 0.045, 0), Vector3(0.96, 0.09, 26.0)],
+		[Vector3(16.42, 0.045, 0), Vector3(0.96, 0.09, 26.0)],
+	]:
+		var ground := CSGBox3D.new()
+		ground.size = patch[1]
+		ground.material = snow_mat
+		ground.position = patch[0]
+		_season_fx_root.add_child(ground)
+
+	for entry in _season_tree_spots:
+		var pos: Vector3 = entry.get("pos", Vector3.ZERO)
+		var scale := float(entry.get("scale", 1.0))
+		var cap := CSGSphere3D.new()
+		cap.radius = 1.25 * scale
+		cap.material = snow_mat
+		cap.scale = Vector3(1.18, 0.24, 1.18)
+		cap.position = pos + Vector3(0, 1.7 * scale, 0)
+		_season_fx_root.add_child(cap)
+
+	for entry in _season_mountain_spots:
+		var pos: Vector3 = entry.get("pos", Vector3.ZERO)
+		var scale := float(entry.get("scale", 1.0))
+		var cap := CSGSphere3D.new()
+		cap.radius = 4.2 * scale
+		cap.material = snow_mat
+		cap.scale = Vector3(1.55, 0.2, 1.55)
+		cap.position = pos + Vector3(0, 2.95 * scale, 0)
+		_season_fx_root.add_child(cap)
+
+func _add_season_particles(color: Color, amount: int, gravity: Vector3, size: Vector2, speed: float) -> void:
+	var p := GPUParticles3D.new()
+	p.amount = amount
+	p.lifetime = 8.5
+	p.preprocess = 8.5
+	p.visibility_aabb = AABB(Vector3(-26, -2, -18), Vector3(58, 12, 48))
+	p.layers = 2
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(24, 1.5, 18)
+	pm.direction = Vector3(0, -1, 0)
+	pm.spread = 28.0
+	pm.gravity = gravity
+	pm.initial_velocity_min = speed * 0.35
+	pm.initial_velocity_max = speed
+	pm.scale_min = 0.6
+	pm.scale_max = 1.4
+	p.process_material = pm
+	var q := QuadMesh.new()
+	q.size = size
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	q.material = mat
+	p.draw_pass_1 = q
+	p.position = Vector3(3.0, 5.2, 1.0)
+	_season_fx_root.add_child(p)
 
 # ---------------------------------------------------------------- graph
 
@@ -1295,6 +1602,8 @@ func _build_geometry() -> void:
 	_build_tv_glow()
 	# drop the cat / ball / dogs onto their rooms' current slots
 	_reposition_rec_life()
+	if _season_name != "":
+		apply_season(_season_name, true)
 	return
 	# ── legacy hand-built floor below — unreachable, kept for reference ──────
 	var wall := _mat(Color(0.18, 0.18, 0.25), 0.9)
@@ -1732,11 +2041,13 @@ func _billboard(center: Vector3, tilt_deg: float) -> void:
 ## field with wind-swaying blades, low-poly mountains, hills and pine trees.
 func _build_countryside() -> void:
 	# Ground: one big meadow under and around the building.
-	_box(Vector3(3, -0.12, -2), Vector3(110, 0.2, 90), _mat(Color(0.15, 0.34, 0.13), 0.95))
+	_season_ground_mat = _mat(Color(0.15, 0.34, 0.13), 0.95)
+	_box(Vector3(3, -0.12, -2), Vector3(110, 0.2, 90), _season_ground_mat)
 
 	# Swaying grass: thousands of shader-animated blades via MultiMesh.
 	var grass_mat := ShaderMaterial.new()
 	grass_mat.shader = GRASS_SHADER
+	_season_grass_mat = grass_mat
 	var blade := QuadMesh.new()
 	blade.size = Vector2(0.16, 0.42)
 	blade.material = grass_mat
@@ -1774,6 +2085,13 @@ func _build_countryside() -> void:
 
 	if _env_available():
 		# Real low-poly pack: mountain range, trees, bushes, rocks, logs.
+		_season_mountain_spots = [
+			{"pos": Vector3(2, 0, -27), "scale": 1.4},
+			{"pos": Vector3(-22, 0, -24), "scale": 1.2},
+			{"pos": Vector3(24, 0, -25), "scale": 1.3},
+			{"pos": Vector3(-38, 0, -18), "scale": 0.9},
+			{"pos": Vector3(40, 0, -18), "scale": 0.8},
+		]
 		_env("Mounting_3", Vector3(2, 0, -27), 0.0, 1.4)
 		_env("Mounting_2", Vector3(-22, 0, -24), 20.0, 1.2)
 		_env("Mounting_1", Vector3(24, 0, -25), -15.0, 1.3)
@@ -1783,6 +2101,7 @@ func _build_countryside() -> void:
 			var tp: Vector3 = tree_spots[i]
 			var kind := "Tree_%d" % (1 + i % 3)
 			var ts := 0.45 + fmod(absf(tp.x * 3.7 + tp.z * 1.3), 1.0) * 0.35
+			_season_tree_spots.append({"pos": tp, "scale": ts})
 			_env(kind, tp, fmod(tp.x * 53.0, 360.0), ts)
 		for i in 10:
 			var bp := Vector3(-32.0 + fmod(i * 13.7, 66.0), 0, 16.0 + fmod(i * 7.3, 14.0))
@@ -1804,11 +2123,15 @@ func _build_countryside() -> void:
 	else:
 		# Procedural fallback so clones without the pack still get a horizon.
 		var rock := _mat(Color(0.32, 0.4, 0.45), 0.95)
-		var snow := _mat(Color(0.92, 0.95, 1.0), 0.8)
-		for m in [
-			[Vector3(-18, 0, -26), 14.0, 16.0], [Vector3(-2, 0, -30), 18.0, 22.0],
-			[Vector3(16, 0, -27), 15.0, 18.0], [Vector3(30, 0, -24), 11.0, 13.0],
-		]:
+		_season_mountain_mats.append(rock)
+		var mountains := [
+			[Vector3(-18, 0, -26), 14.0, 16.0],
+			[Vector3(-2, 0, -30), 18.0, 22.0],
+			[Vector3(16, 0, -27), 15.0, 18.0],
+			[Vector3(30, 0, -24), 11.0, 13.0],
+		]
+		for m in mountains:
+			_season_mountain_spots.append({"pos": m[0], "scale": float(m[2]) / 16.0})
 			var peak := CSGCylinder3D.new()
 			peak.cone = true
 			peak.radius = m[1]
@@ -1819,8 +2142,10 @@ func _build_countryside() -> void:
 			peak.position = m[0] + Vector3(0, m[2] * 0.5 - 0.2, 0)
 		var trunk_mat := _mat(Color(0.3, 0.2, 0.12), 0.9)
 		var leaf_mat := _mat(Color(0.12, 0.32, 0.12), 0.9)
+		_season_leaf_mats.append(leaf_mat)
 		for tp in tree_spots:
 			var s := 0.8 + fmod(absf(tp.x * 3.7 + tp.z * 1.3), 1.0) * 0.8
+			_season_tree_spots.append({"pos": tp, "scale": s})
 			var trunk := CSGCylinder3D.new()
 			trunk.radius = 0.16 * s
 			trunk.height = 0.9 * s

@@ -60,7 +60,13 @@ echo "  [3/4] Checking shell update..."
 SHELL_CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null | grep -c "^shell/" || true)
 if [ "$SHELL_CHANGED" -gt 0 ]; then
   PLACED=0
-  if [ -z "$BAGIDEA_NO_PREBUILT" ]; then
+  PREBUILT_ALLOWED=1
+  BRANCH=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ]; then
+    PREBUILT_ALLOWED=0
+    echo "  - Development branch '$BRANCH': building shell from source instead of using release prebuilts"
+  fi
+  if [ -z "$BAGIDEA_NO_PREBUILT" ] && [ "$PREBUILT_ALLOWED" = "1" ]; then
     SLUG=$(git -C "$ROOT" remote get-url origin 2>/dev/null | sed -nE 's#.*github\.com[:/]+([^/]+)/([^/.]+).*#\1/\2#p')
     VER=$(head -n1 "$ROOT/VERSION" 2>/dev/null | tr -d ' \r\n')
     if [ -n "$SLUG" ] && [ -n "$VER" ]; then

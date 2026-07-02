@@ -5,6 +5,7 @@
 // without booting the daemon; the IO wrappers only read/write files.
 
 const fs = require("fs");
+const cliOutput = require("./runtimes/cli-output");
 
 // journal.jsonl is append-only and replay only ever reads the last
 // REPLAY_COUNT (80) lines, so keeping the last few thousand is plenty of
@@ -15,6 +16,9 @@ const JOURNAL_MAX = 5000;
 const SESS_MAX_AGE_DAYS = 30;
 const SESS_MAX_THREADS = 40;
 const DAY_MS = 86400000;
+const SYSTEM_TEXT_MIGRATIONS = new Map([
+  ["💓 รอบตรวจความเรียบร้อย", "💓 Health check"],
+]);
 
 // Pure: keep at most `max` lines, newest (tail) wins.
 function trimLines(lines, max) {
@@ -70,7 +74,60 @@ function pruneSessions(sess, opts = {}) {
   return { sess: out, changed, dropped };
 }
 
+function normalizeSessionText(text) {
+  if (typeof text !== "string") return text;
+  return SYSTEM_TEXT_MIGRATIONS.get(text) || text;
+}
+
+function cleanLegacyRuntimeNoise(text) {
+  if (typeof text !== "string") return text;
+  const cleaned = cliOutput.cleanCliDiagnostic(text);
+  return cleaned || "";
+}
+
+// Pure: migrate known old system-generated session chrome. Dynamic user/agent
+// content is intentionally left alone; only exact legacy system strings move.
+function normalizeSessions(sess) {
+  const out = {};
+  let changed = false;
+  let rewritten = 0;
+  for (const agent of Object.keys(sess || {})) {
+    const list = Array.isArray(sess[agent]) ? sess[agent] : [];
+    out[agent] = list.map((thread) => {
+      if (!thread || typeof thread !== "object") return thread;
+      let next = thread;
+      const title = normalizeSessionText(thread.title);
+      if (title !== thread.title) {
+        next = { ...next, title };
+        changed = true;
+        rewritten++;
+      }
+      if (Array.isArray(thread.log)) {
+        const log = thread.log.map((entry) => {
+          if (!entry || typeof entry !== "object") return entry;
+          const normalized = normalizeSessionText(entry.text);
+          const text = cleanLegacyRuntimeNoise(normalized);
+          if (text === entry.text) return entry;
+          changed = true;
+          rewritten++;
+          return { ...entry, text };
+        }).filter((entry) => {
+          if (!entry || typeof entry !== "object") return true;
+          if (typeof entry.text !== "string") return true;
+          if (entry.text.trim()) return true;
+          changed = true;
+          rewritten++;
+          return false;
+        });
+        if (log !== thread.log && log.some((entry, i) => entry !== thread.log[i])) next = { ...next, log };
+      }
+      return next;
+    });
+  }
+  return { sess: out, changed, rewritten };
+}
+
 module.exports = {
   JOURNAL_MAX, SESS_MAX_AGE_DAYS, SESS_MAX_THREADS,
-  trimLines, rotateJournal, pruneSessions,
+  trimLines, rotateJournal, pruneSessions, normalizeSessions, cleanLegacyRuntimeNoise,
 };

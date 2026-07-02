@@ -41,6 +41,35 @@ var _lang := "en"
 var _i18n_req: HTTPRequest
 var _pos_req: HTTPRequest
 var _pos_busy := false
+var _chat_req: HTTPRequest
+var _session_open_req: HTTPRequest
+var _chat_layer: CanvasLayer
+var _chat_panel: PanelContainer
+var _chat_title: Label
+var _chat_meta: Label
+var _chat_tasks: Label
+var _chat_recent: Label
+var _chat_input: LineEdit
+var _chat_autofilling := false
+var _selected_chat_agent := ""
+var _last_chat_agent := ""
+var _click_down_pos := Vector2.INF
+var _agent_recent := {}
+var _agent_task_titles := {}
+var _agent_sessions := {}
+var _agent_runtime := {}
+var _agent_last_status := {}
+var _agent_last_tool := {}
+var _agent_usage := {}
+var _agent_task_started_at := {}
+
+func _office_hour() -> float:
+	var t := Time.get_time_dict_from_system()
+	return float(t.hour) + float(t.minute) / 60.0
+
+func _is_night_shift() -> bool:
+	var h := _office_hour()
+	return h < 5.8 or h >= 19.0
 
 func _ready() -> void:
 	# Hold off ambient cinematic close-ups so the OPENING shot is the CEO intro,
@@ -66,6 +95,383 @@ func _ready() -> void:
 	add_child(_i18n_req)
 	_i18n_req.request_completed.connect(_on_i18n_loaded)
 	_fetch_i18n()
+	_setup_click_chat_ui()
+
+func _setup_click_chat_ui() -> void:
+	_chat_req = HTTPRequest.new()
+	add_child(_chat_req)
+	_chat_req.request_completed.connect(_on_chat_sent)
+
+	_session_open_req = HTTPRequest.new()
+	add_child(_session_open_req)
+
+	_chat_layer = CanvasLayer.new()
+	_chat_layer.layer = 80
+	add_child(_chat_layer)
+
+	_chat_panel = PanelContainer.new()
+	_chat_panel.visible = false
+	_chat_panel.anchor_left = 0.5
+	_chat_panel.anchor_right = 0.5
+	_chat_panel.anchor_top = 1.0
+	_chat_panel.anchor_bottom = 1.0
+	_chat_panel.offset_left = -280.0
+	_chat_panel.offset_right = 280.0
+	_chat_panel.offset_top = -392.0
+	_chat_panel.offset_bottom = -72.0
+	_chat_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_chat_layer.add_child(_chat_panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chat_panel.add_child(box)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+
+	_chat_title = Label.new()
+	_chat_title.text = "Chat with agent"
+	_chat_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_chat_title)
+
+	var close := Button.new()
+	close.text = "Close"
+	close.focus_mode = Control.FOCUS_NONE
+	close.pressed.connect(_hide_chat_prompt)
+	row.add_child(close)
+
+	var open_session := Button.new()
+	open_session.text = "Open session"
+	open_session.focus_mode = Control.FOCUS_NONE
+	open_session.pressed.connect(_open_selected_session)
+	row.add_child(open_session)
+
+	_chat_meta = Label.new()
+	_chat_meta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_meta.add_theme_font_size_override("font_size", 12)
+	box.add_child(_chat_meta)
+
+	_chat_tasks = Label.new()
+	_chat_tasks.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_tasks.add_theme_font_size_override("font_size", 12)
+	box.add_child(_chat_tasks)
+
+	_chat_recent = Label.new()
+	_chat_recent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_recent.add_theme_font_size_override("font_size", 11)
+	_chat_recent.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(_chat_recent)
+
+	var input_row := HBoxContainer.new()
+	input_row.add_theme_constant_override("separation", 8)
+	box.add_child(input_row)
+
+	_chat_input = LineEdit.new()
+	_chat_input.placeholder_text = "Type a task or message"
+	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_input.text_submitted.connect(func(_text: String): _submit_chat_prompt())
+	_chat_input.text_changed.connect(_on_chat_input_changed)
+	input_row.add_child(_chat_input)
+
+	var mention := Button.new()
+	mention.text = "@"
+	mention.tooltip_text = "Insert @agent shortcut"
+	mention.focus_mode = Control.FOCUS_NONE
+	mention.pressed.connect(_insert_selected_agent_mention)
+	input_row.add_child(mention)
+
+	var send := Button.new()
+	send.text = "Send"
+	send.pressed.connect(_submit_chat_prompt)
+	input_row.add_child(send)
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		if is_instance_valid(_chat_panel) and _chat_panel.visible:
+			_hide_chat_prompt()
+			get_viewport().set_input_as_handled()
+		return
+
+	if not (event is InputEventMouseButton):
+		return
+	var mb := event as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if mb.pressed:
+		_click_down_pos = mb.position
+		return
+	if _click_down_pos == Vector2.INF or _click_down_pos.distance_to(mb.position) > 6.0:
+		return
+	if _over_ui():
+		return
+
+	var id := _agent_at_screen(mb.position)
+	if id == "":
+		return
+	_open_chat_prompt(id)
+	get_viewport().set_input_as_handled()
+
+func _over_ui() -> bool:
+	return get_viewport().gui_get_hovered_control() != null
+
+func _agent_at_screen(screen: Vector2) -> String:
+	var cam := _active_camera()
+	if cam == null:
+		return ""
+	var best_id := ""
+	var best_dist := 56.0
+	var rect := Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size).grow(72.0)
+
+	for id in agents.keys():
+		var a: Dictionary = agents[id]
+		if not (a.has("node") and is_instance_valid(a.node) and a.node.is_visible_in_tree()):
+			continue
+		var node: Node3D = a.node
+		if cam.is_position_behind(node.global_position):
+			continue
+		var p := cam.unproject_position(node.global_position + Vector3(0, 0.9, 0))
+		if not rect.has_point(p):
+			continue
+		var d := p.distance_to(screen)
+		if d < best_dist:
+			best_dist = d
+			best_id = str(id)
+
+	if best_id == "" and is_instance_valid(ceo) and ceo.is_visible_in_tree():
+		if not cam.is_position_behind(ceo.global_position):
+			var cp := cam.unproject_position(ceo.global_position + Vector3(0, 0.9, 0))
+			if rect.has_point(cp) and cp.distance_to(screen) < best_dist:
+				best_id = "ceo"
+	return best_id
+
+func _active_camera() -> Camera3D:
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		return cam
+	return get_node_or_null("../CameraRig/Camera3D") as Camera3D
+
+func _open_chat_prompt(id: String) -> void:
+	if not is_instance_valid(_chat_panel):
+		return
+	_selected_chat_agent = id
+	_chat_input.text = ""
+	_chat_panel.visible = true
+	_refresh_chat_panel()
+	_chat_input.grab_focus()
+	var node := _node_for_agent(id)
+	if is_instance_valid(node):
+		node.set_status("listening...")
+		_focus_kick(node, 4.0)
+
+func _hide_chat_prompt() -> void:
+	if is_instance_valid(_chat_panel):
+		_chat_panel.visible = false
+	_selected_chat_agent = ""
+
+func _refresh_chat_panel() -> void:
+	if _selected_chat_agent == "" or not is_instance_valid(_chat_panel):
+		return
+	var id := _selected_chat_agent
+	var name := _agent_label(id)
+	var role := _agent_role(id)
+	var state := _agent_state(id)
+	var runtime := str(_agent_runtime.get(id, ""))
+	var session := str(_agent_sessions.get(id, ""))
+	var status := str(_agent_last_status.get(id, ""))
+	var tool := str(_agent_last_tool.get(id, ""))
+	var elapsed := _agent_elapsed_text(id)
+	var usage := _agent_usage_text(id)
+	_chat_title.text = name
+	_chat_input.placeholder_text = "Message " + name
+	var bits: Array[String] = ["State: " + state]
+	if role != "":
+		bits.append("Role: " + role)
+	if runtime != "":
+		bits.append("Runtime: " + runtime)
+	if session != "":
+		bits.append("Session: " + session)
+	if status != "":
+		bits.append("Status: " + status)
+	if tool != "":
+		bits.append("Tool: " + tool)
+	if elapsed != "":
+		bits.append("Elapsed: " + elapsed)
+	if usage != "":
+		bits.append("Usage: " + usage)
+	_chat_meta.text = "  |  ".join(bits)
+	_chat_tasks.text = "Tasks: " + _agent_tasks_text(id)
+	_chat_recent.text = "Recent:\n" + _agent_recent_text(id)
+
+func _agent_role(id: String) -> String:
+	var node := _node_for_agent(id)
+	if is_instance_valid(node):
+		return str(node.agent_role)
+	if roster.has(id):
+		return str(roster[id].get("role", ""))
+	return ""
+
+func _agent_state(id: String) -> String:
+	if agents.has(id):
+		return str(agents[id].get("state", "idle"))
+	return "idle"
+
+func _agent_tasks_text(id: String) -> String:
+	var titles: Dictionary = _agent_task_titles.get(id, {})
+	var names: Array[String] = []
+	if agents.has(id):
+		var tasks: Dictionary = agents[id].get("tasks", {})
+		for task in tasks.keys():
+			names.append(str(titles.get(task, task)))
+	if names.is_empty():
+		return "none"
+	return ", ".join(names)
+
+func _agent_elapsed_text(id: String) -> String:
+	var started := float(_agent_task_started_at.get(id, 0.0))
+	if started <= 0.0:
+		return ""
+	var seconds := maxi(0, int(Time.get_unix_time_from_system() - started))
+	return "%02d:%02d" % [seconds / 60, seconds % 60]
+
+func _agent_usage_text(id: String) -> String:
+	var u: Dictionary = _agent_usage.get(id, {})
+	if u.is_empty():
+		return ""
+	var input := int(u.get("in", 0))
+	var win := int(u.get("win", 0))
+	if win > 0:
+		return str(input) + "/" + str(win)
+	return str(input)
+
+func _agent_recent_text(id: String) -> String:
+	var lines: Array = _agent_recent.get(id, [])
+	if lines.is_empty():
+		return "No recent events"
+	var out: Array[String] = []
+	var start := maxi(0, lines.size() - 8)
+	for i in range(start, lines.size()):
+		out.append("- " + str(lines[i]))
+	return "\n".join(out)
+
+func _insert_selected_agent_mention() -> void:
+	if _selected_chat_agent == "":
+		return
+	var id := _mention_default_agent_id()
+	if id == "":
+		return
+	_chat_input.text = "@" + id + " " + _chat_input.text.strip_edges()
+	_chat_input.caret_column = _chat_input.text.length()
+	_chat_input.grab_focus()
+
+func _on_chat_input_changed(text: String) -> void:
+	if _chat_autofilling:
+		return
+	if text != "@":
+		return
+	var id := _mention_default_agent_id()
+	if id == "":
+		return
+	_chat_autofilling = true
+	_chat_input.text = "@" + id + " "
+	_chat_input.caret_column = _chat_input.text.length()
+	_chat_autofilling = false
+
+func _mention_default_agent_id() -> String:
+	if _selected_chat_agent != "" and _selected_chat_agent != "ceo" and _selected_chat_agent != "main":
+		return _selected_chat_agent
+	return _first_staff_agent_id()
+
+func _first_staff_agent_id() -> String:
+	for id in roster.keys():
+		var s := str(id)
+		if s != "ceo" and s != "main":
+			return s
+	for id in agents.keys():
+		var s := str(id)
+		if s != "ceo" and s != "main":
+			return s
+	return ""
+
+func _note_agent_event(id: String, text: String) -> void:
+	if id == "":
+		return
+	var lines: Array = _agent_recent.get(id, [])
+	lines.append(text.replace("\n", " ").left(96))
+	while lines.size() > 12:
+		lines.pop_front()
+	_agent_recent[id] = lines
+	if _selected_chat_agent == id and is_instance_valid(_chat_panel) and _chat_panel.visible:
+		_refresh_chat_panel()
+
+func _submit_chat_prompt() -> void:
+	if _selected_chat_agent == "":
+		return
+	var prompt := _chat_input.text.strip_edges()
+	if prompt == "":
+		return
+	var agent := _selected_chat_agent
+	_last_chat_agent = agent
+	_chat_input.text = ""
+	var node := _node_for_agent(agent)
+	if is_instance_valid(node):
+		node.set_status("sending...")
+	_agent_last_status[agent] = "sending..."
+	_note_agent_event(agent, "Message sent from office panel")
+	var route_agent := "main" if prompt.begins_with("@") else agent
+	var err := _chat_req.request("http://127.0.0.1:8787/chat",
+		["content-type: application/json"], HTTPClient.METHOD_POST,
+		JSON.stringify({"agent": route_agent, "prompt": prompt}))
+	if err != OK and is_instance_valid(node):
+		node.set_status("chat failed: " + str(err))
+		_agent_last_status[agent] = "chat failed: " + str(err)
+		_note_agent_event(agent, "Chat request failed: " + str(err))
+
+func _on_chat_sent(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if _last_chat_agent == "":
+		return
+	var node := _node_for_agent(_last_chat_agent)
+	if not is_instance_valid(node):
+		return
+	if code >= 200 and code < 300:
+		node.set_status("sent")
+		_agent_last_status[_last_chat_agent] = "sent"
+		_note_agent_event(_last_chat_agent, "Daemon accepted message")
+	else:
+		var text := body.get_string_from_utf8().strip_edges()
+		node.set_status(("chat failed " + str(code) + " " + text).left(42))
+		_agent_last_status[_last_chat_agent] = ("chat failed " + str(code)).left(42)
+		_note_agent_event(_last_chat_agent, ("Chat failed " + str(code) + " " + text).left(96))
+
+func _open_selected_session() -> void:
+	if _selected_chat_agent == "" or not is_instance_valid(_session_open_req):
+		return
+	if _session_open_req.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		return
+	var session := str(_agent_sessions.get(_selected_chat_agent, ""))
+	var err := _session_open_req.request("http://127.0.0.1:8787/sessions/open",
+		["content-type: application/json", "x-bagidea-ui: 1"], HTTPClient.METHOD_POST,
+		JSON.stringify({"agent": _selected_chat_agent, "session": session}))
+	if err == OK:
+		_note_agent_event(_selected_chat_agent, "Opening session terminal")
+	else:
+		_note_agent_event(_selected_chat_agent, "Open session failed: " + str(err))
+
+func _node_for_agent(id: String) -> Sprite3D:
+	if id == "ceo" and is_instance_valid(ceo):
+		return ceo
+	if agents.has(id) and is_instance_valid(agents[id].node):
+		return agents[id].node
+	return null
+
+func _agent_label(id: String) -> String:
+	var node := _node_for_agent(id)
+	if is_instance_valid(node):
+		return str(node.agent_name)
+	if roster.has(id):
+		return str(roster[id].get("name", id))
+	return id.capitalize()
 
 ## Rooms were rearranged (jigsaw swap) → drop everyone back onto their home
 ## anchor so they stand in the correct room. Normal walking resumes after.
@@ -92,8 +498,15 @@ func _stream_positions() -> void:
 	for id in agents:
 		var a: Dictionary = agents[id]
 		if is_instance_valid(a.node):
+			var titles: Dictionary = _agent_task_titles.get(id, {})
+			var task_names: Array[String] = []
+			for tk in Dictionary(a.get("tasks", {})).keys():
+				task_names.append(str(titles.get(tk, tk)))
 			list.append({"id": id, "x": a.node.position.x, "z": a.node.position.z,
-				"state": a.state})
+				"state": a.state, "tasks": task_names, "session": _agent_sessions.get(id, ""),
+				"runtime": _agent_runtime.get(id, ""), "tool": _agent_last_tool.get(id, ""),
+				"status": _agent_last_status.get(id, ""), "usage": _agent_usage.get(id, {}),
+				"elapsed": _agent_elapsed_text(id)})
 	if is_instance_valid(ceo) and not agents.has("ceo"):
 		list.append({"id": "ceo", "x": ceo.position.x, "z": ceo.position.z, "state": "idle"})
 	for sub in ghosts:
@@ -125,6 +538,8 @@ func _fetch_i18n() -> void:
 		_i18n = {}
 		return
 	if is_instance_valid(_i18n_req):
+		if _i18n_req.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+			return
 		_i18n_req.request("http://127.0.0.1:8787/i18n/all?lang=" + _lang)
 
 func _on_i18n_loaded(_res: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
@@ -197,6 +612,16 @@ func handle(evt: Dictionary) -> void:
 	if type == "ui.daylight":
 		get_node("../").apply_daylight_event(evt)
 		return
+	if type == "ui.season":
+		var season_root := get_node("../")
+		if season_root and season_root.has_method("apply_season_event"):
+			season_root.apply_season_event(evt)
+		return
+	if type == "ui.weather":
+		var weather_root := get_node("../")
+		if weather_root and weather_root.has_method("apply_weather_event"):
+			weather_root.apply_weather_event(evt)
+		return
 	if type == "ui.sound":
 		Sfx.enabled = bool(evt.get("on", true))
 		return
@@ -205,13 +630,13 @@ func handle(evt: Dictionary) -> void:
 		_fetch_i18n()
 		return
 	if type == "ui.visibility":
-		# "Hide office" hides ONLY the overlay UI — the wallpaper is still the
-		# live desktop background, so it must keep rendering smoothly. Crawling
-		# to 2 FPS made the still-visible wallpaper stutter badly; keep it at the
-		# normal wallpaper rate. We only mute sound while hidden.
 		var on := bool(evt.get("on", true))
 		Sfx.hidden = not on
-		Engine.max_fps = 30
+		var root := get_node("../")
+		if root and root.has_method("set_wallpaper_visible"):
+			root.set_wallpaper_visible(on)
+		else:
+			Engine.max_fps = 30 if on else 2
 		return
 	if type.begins_with("ui."):
 		return  # overlay debug beacons aren't agents
@@ -221,6 +646,12 @@ func handle(evt: Dictionary) -> void:
 		# connect (authoritative), so this re-pins a manual morning/night choice
 		# that a renderer restart would otherwise drop back to real time.
 		get_node("../").apply_daylight_event({"hour": evt.get("daylight", "auto")})
+		var season_root := get_node("../")
+		if season_root and season_root.has_method("apply_season_event"):
+			season_root.apply_season_event({"offset": evt.get("seasonOffset", 0)})
+		var weather_root := get_node("../")
+		if weather_root and weather_root.has_method("apply_weather_event"):
+			weather_root.apply_weather_event({"offset": evt.get("weatherOffset", 0)})
 		_apply_roster(evt)
 		return
 	if type == "roster.removed":
@@ -283,6 +714,8 @@ func handle(evt: Dictionary) -> void:
 	var id := str(evt.get("agent", "agent"))
 	var task := str(evt.get("task", id))  # agent-as-task fallback (tier-1 adapters)
 	if type == "agent.offline":
+		_agent_last_status[id] = "offline"
+		_note_agent_event(id, "Agent went offline")
 		_to_dorm(id)
 		return
 	var a: Dictionary = _ensure(id)
@@ -296,8 +729,18 @@ func handle(evt: Dictionary) -> void:
 		_clear_status_later(a, 3.0)
 	match type:
 		"agent.online":
+			_agent_last_status[id] = "online"
+			_note_agent_event(id, "Agent online")
 			pass  # _ensure already spawned them
 		"task.started":
+			_agent_task_titles[id] = _agent_task_titles.get(id, {})
+			_agent_task_titles[id][task] = str(evt.get("title", task))
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "started"
+			_agent_last_tool.erase(id)
+			_agent_task_started_at[id] = Time.get_unix_time_from_system()
+			_note_agent_event(id, "Started: " + str(evt.get("title", task)))
 			a.tasks[task] = true
 			_to_desk(a)
 			if not theatrical:
@@ -306,6 +749,11 @@ func handle(evt: Dictionary) -> void:
 				_focus_kick(a.node, 6.0)
 				world.board_set(task, "running", id, _face_for(id))
 		"task.progress":
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = str(evt.get("tool", "working..."))
+			_agent_last_tool[id] = str(evt.get("tool", "working..."))
+			_note_agent_event(id, "Progress: " + str(evt.get("tool", "working...")))
 			if a.state != "working":
 				a.tasks[task] = true
 				_to_desk(a)
@@ -313,6 +761,14 @@ func handle(evt: Dictionary) -> void:
 					world.board_set(task, "running", id, _face_for(id))
 			a.node.set_status(str(evt.get("tool", "working…")))
 		"task.completed":
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "completed"
+			_agent_last_tool.erase(id)
+			_agent_task_started_at.erase(id)
+			if evt.has("usage") and evt["usage"] is Dictionary:
+				_agent_usage[id] = evt["usage"]
+			_note_agent_event(id, "Completed: " + str(_agent_task_titles.get(id, {}).get(task, task)))
 			a.tasks.erase(task)
 			_fx(a, "success")
 			if not theatrical:
@@ -326,6 +782,12 @@ func handle(evt: Dictionary) -> void:
 				else:
 					_finish(a, "done ✓")
 		"task.failed":
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "failed"
+			_agent_last_tool.erase(id)
+			_agent_task_started_at.erase(id)
+			_note_agent_event(id, "Failed: " + str(evt.get("reason", _agent_task_titles.get(id, {}).get(task, task))))
 			a.tasks.erase(task)
 			awaiting_delivery.erase(id)  # nothing to deliver
 			_fx(a, "failure")
@@ -337,6 +799,8 @@ func handle(evt: Dictionary) -> void:
 			if a.tasks.is_empty():
 				_finish(a, "failed ✗")
 		"perm.requested":
+			_agent_last_status[id] = "needs approval"
+			_note_agent_event(id, "Permission requested: " + str(evt.get("tool", task)))
 			if not theatrical:
 				Sfx.play("ding")
 				_maybe_focus(a.node, 0.85, 8.0)
@@ -349,11 +813,13 @@ func handle(evt: Dictionary) -> void:
 			_sec_pending[task] = true
 			_security_walk_after_grace(a, id, task)
 		"perm.approved":
+			_agent_last_status[id] = "permission approved"
+			_note_agent_event(id, "Permission approved")
 			_sec_pending.erase(task)
 			if not theatrical:
 				Sfx.play("blip2")
 			_set_state(a, "working")
-			a.node.set_status("approved ✓")
+			a.node.set_status(ui("อนุมัติแล้ว ✓"))
 			_fx(a, "thumbs_up")
 			# Only walk back if it actually LEFT to ask. A granted / allow-forever
 			# tool is auto-approved without ever moving the agent off its desk, so
@@ -363,6 +829,8 @@ func handle(evt: Dictionary) -> void:
 			if not theatrical:
 				world.board_set(task, "running", id, _face_for(id))
 		"perm.denied":
+			_agent_last_status[id] = "permission denied"
+			_note_agent_event(id, "Permission denied")
 			_sec_pending.erase(task)
 			if not theatrical:
 				Sfx.play("buzz")
@@ -372,8 +840,10 @@ func handle(evt: Dictionary) -> void:
 				world.board_set(task, "failed", id, _face_for(id))
 				_board_clear_later(task)
 			if a.tasks.is_empty():
-				_finish(a, "denied ✗")
+				_finish(a, ui("ปฏิเสธแล้ว ✗"))
 		"ceo.summon":
+			_agent_last_status[id] = "receiving order"
+			_note_agent_event(id, "Receiving CEO order")
 			# Chain of command: the Director comes over and TAILS the boss —
 			# truly walking together while the order is given.
 			if not theatrical:
@@ -390,6 +860,8 @@ func handle(evt: Dictionary) -> void:
 				Fx.spawn(ceo, "heart", Vector3(0, 1.3, 0))
 				_tail_ceo(a)
 		"task.delegated":
+			_agent_last_status[id] = "delegating"
+			_note_agent_event(id, "Delegated to " + str(evt.get("target", "")))
 			# ...then walks to the assignee, hands the work over, and STAYS
 			# on their heels until they report back. More than one delegate?
 			# Supervisor clones split off to shadow the rest.
@@ -440,19 +912,27 @@ func handle(evt: Dictionary) -> void:
 		"voice.say":
 			# An agent spoke out loud — show what they said as a speech bubble too.
 			if not evt.get("replay", false):
+				_agent_last_status[id] = "speaking"
+				_note_agent_event(id, "Voice: " + str(evt.get("text", "")).left(70))
 				a.node.set_status("🗣 " + str(evt.get("text", "")).left(30))
 				_fx(a, "music")
 				_clear_status_later(a, 6.0)
 		"skill.created":
+			_agent_last_status[id] = "learned skill"
+			_note_agent_event(id, "Learned skill: " + str(evt.get("skill", "")))
 			# Hermes moment: the agent distilled its work into a new skill.
 			if not theatrical:
 				Sfx.play("tada")
-			a.node.set_status("📚 learned: " + str(evt.get("skill", "")))
+			a.node.set_status(ui("📚 เรียนรู้สกิลแล้ว:") + " " + str(evt.get("skill", "")))
 			Fx.spawn(a.node, "light_burst", Vector3(0, 0.45, 0), 0.045)  # wraps the body
 			_clear_status_later(a, 6.0)
 		"chat.message":
 			# Speech bubble: first line of what the agent actually said.
 			var text := str(evt.get("text", "")).split("\n")[0]
+			_agent_sessions[id] = str(evt.get("session", _agent_sessions.get(id, "")))
+			_agent_runtime[id] = str(evt.get("runtime", _agent_runtime.get(id, "")))
+			_agent_last_status[id] = "message"
+			_note_agent_event(id, "Message: " + text.left(70))
 			if not evt.get("replay", false):
 				_fx(a, "music")
 				if not theatrical:
@@ -734,7 +1214,7 @@ func _route_hook_to_ghost(id: String, type: String, evt: Dictionary) -> void:
 			_sec_pending["g:" + id] = true
 			_ghost_security_after_grace(id)
 		"perm.approved":
-			g.set_status("approved ✓")
+			g.set_status(ui("อนุมัติแล้ว ✓"))
 			_sec_pending.erase("g:" + id)
 			# Only walk back if it ACTUALLY left for Security. An auto-approved tool
 			# (granted / allow-forever) never moved it off the deck, so don't make
@@ -742,7 +1222,7 @@ func _route_hook_to_ghost(id: String, type: String, evt: Dictionary) -> void:
 			if g.position.distance_to(gh.spot) > 1.5:
 				g.walk_to(_ghost_desk_route(g, gh.spot))
 		"perm.denied":
-			g.set_status("denied ✗")
+			g.set_status(ui("ปฏิเสธแล้ว ✗"))
 			_sec_pending.erase("g:" + id)
 			if g.position.distance_to(gh.spot) > 1.5:
 				g.walk_to(_ghost_desk_route(g, gh.spot))
@@ -1136,7 +1616,7 @@ func _supervise(tgt: String, follower: Sprite3D) -> void:
 	if g != null and is_instance_valid(g):
 		_dissolve_supervisor(g)
 	elif is_main and agents.has("main") and agents["main"].tasks.is_empty():
-		_finish(agents["main"], "มอบหมายแล้ว ✓")
+		_finish(agents["main"], ui("มอบหมายแล้ว ✓"))
 
 ## Too busy for the meeting? แยกร่างเข้าประชุมแทน — a translucent stand-in
 ## walks to the table while the real one keeps working.
@@ -1150,7 +1630,7 @@ func _spawn_meeting_ghost(id: String, seat: String) -> void:
 	g.hair_color = pnode.hair_color
 	g.skin_color = pnode.skin_color
 	g.rank = "ghost"
-	g.agent_name = str(pnode.agent_name) + " · ประชุม"
+	g.agent_name = str(pnode.agent_name) + " · " + ui("ประชุม")
 	g.agent_role = "stand-in"
 	get_parent().add_child(g)
 	g.set_ghost()
@@ -1383,6 +1863,15 @@ func _idle_life_loop() -> void:
 		if pool.is_empty():
 			continue
 		var a: Dictionary = pool.pick_random()
+		if _is_night_shift() and randf() < 0.28:
+			var nr: float = randf()
+			if nr < 0.38:
+				_act_night_patrol(a)
+			elif nr < 0.70:
+				_act_late_shift(a)
+			else:
+				_act_night_tea(a, pool)
+			continue
 		# Weighted so the CAFE gets as much love as the REC room, with the odd
 		# wander to the server/meeting rooms (rare). Beds are handled by naps.
 		var r := randf()
@@ -1414,6 +1903,76 @@ func _idle_life_loop() -> void:
 			_act_explore(a)        # a rare peek at the server / meeting room
 		else:
 			_act_server_incident(a)  # 🔥 rare server-room emergency — agent rushes to fix
+
+func _act_night_patrol(a: Dictionary) -> void:
+	a.node.set_status(ui("ตรวจรอบกลางคืน 🔦"))
+	var torch := _attach_patrol_light(a.node)
+	for spot in ["sec_window", "server_c", "lobby_c"]:
+		if a.state != "idle" or not is_instance_valid(a.node):
+			if is_instance_valid(torch):
+				torch.queue_free()
+			return
+		var d: float = _walk(a.node, spot)
+		await get_tree().create_timer(d + randf_range(1.2, 2.4)).timeout
+	if is_instance_valid(torch):
+		torch.queue_free()
+	if a.state == "idle":
+		Fx.spawn(a.node, "sparkle", Vector3(0, 1.1, 0), 0.02)
+		_maybe_focus(a.node, 0.45, 6.0)
+		_clear_status_later(a, 5.0)
+
+func _attach_patrol_light(node: Node3D) -> Node3D:
+	var rig := Node3D.new()
+	rig.name = "PatrolLight"
+	node.add_child(rig)
+	rig.position = Vector3(0, 0.7, -0.15)
+	var lamp := SpotLight3D.new()
+	lamp.light_color = Color(0.72, 0.84, 1.0)
+	lamp.light_energy = 1.8
+	lamp.spot_range = 8.0
+	lamp.spot_angle = 22.0
+	lamp.shadow_enabled = false
+	lamp.rotation_degrees = Vector3(-62.0, 0.0, 0.0)
+	rig.add_child(lamp)
+	var glow := OmniLight3D.new()
+	glow.light_color = Color(0.58, 0.72, 1.0)
+	glow.light_energy = 0.35
+	glow.omni_range = 2.6
+	rig.add_child(glow)
+	return rig
+
+func _act_late_shift(a: Dictionary) -> void:
+	if a.state != "idle":
+		return
+	a.node.set_status(ui("กะดึกเงียบ ๆ 🌙"))
+	var desk: String = "lead_desk" if a.id == "main" else (desk_pool.pop_front() if desk_pool.size() > 0 else "ops_c")
+	var d: float = _walk(a.node, desk, a.node.DIR_UP)
+	await get_tree().create_timer(d + randf_range(10.0, 18.0)).timeout
+	if a.state == "idle":
+		a.node.set_status(ui("พักสายตา 🌙"))
+		if desk != "lead_desk" and desk != "ops_c":
+			desk_pool.append(desk)
+		_clear_status_later(a, 5.0)
+
+func _act_night_tea(a: Dictionary, pool: Array) -> void:
+	var others := pool.filter(func(o): return o.id != a.id and o.state == "idle")
+	if others.is_empty():
+		_act_late_shift(a)
+		return
+	var b: Dictionary = others.pick_random()
+	a.node.set_status(ui("ชงชารอบดึก 🍵"))
+	b.node.set_status(ui("คุยเบา ๆ 🍵"))
+	var cafe: Vector3 = world.WP.get("cafe_c", Vector3(7.2, 0.86, 0.2))
+	var da: float = a.node.walk_to(world.path_to(a.node.position, "cafe_c") + [cafe + Vector3(-0.65, 0, 0.35)])
+	var db: float = b.node.walk_to(world.path_to(b.node.position, "cafe_c") + [cafe + Vector3(0.65, 0, 0.35)])
+	await get_tree().create_timer(maxf(da, db) + randf_range(8.0, 14.0)).timeout
+	if a.state == "idle" and is_instance_valid(a.node):
+		_fx(a, "music")
+	if b.state == "idle" and is_instance_valid(b.node):
+		_fx(b, "music")
+	_maybe_focus(a.node, 0.55, 6.0)
+	_clear_status_later(a, 6.0)
+	_clear_status_later(b, 6.0)
 
 func _act_tv(a: Dictionary) -> void:
 	a.node.set_status(ui("ดูทีวี 📺"))
@@ -1714,7 +2273,8 @@ func _nap_loop() -> void:
 				continue
 			if now - float(a.get("idle_since", now)) < 180.0:
 				continue
-			if randf() < 0.5 and bed_pool.size() > 0:
+			var nap_chance: float = 0.78 if _is_night_shift() else 0.5
+			if randf() < nap_chance and bed_pool.size() > 0:
 				_take_nap(a)
 			else:
 				a["idle_since"] = now  # stays up — re-rolls in 3 minutes

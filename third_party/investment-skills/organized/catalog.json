@@ -1,0 +1,208 @@
+{
+  "version": "1.0.0",
+  "skills": [
+    {
+      "id": "invest-bottleneck-hunter",
+      "name": "Investment Bottleneck Hunter",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: bottleneck hunter.",
+      "path": "third_party/investment-skills/organized/skills/invest-bottleneck-hunter/SKILL.md"
+    },
+    {
+      "id": "invest-deep-company-series",
+      "name": "Investment Deep Company Series",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: deep company series.",
+      "path": "third_party/investment-skills/organized/skills/invest-deep-company-series/SKILL.md"
+    },
+    {
+      "id": "invest-dyp-ask",
+      "name": "Investment Dyp Ask",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: dyp ask.",
+      "path": "third_party/investment-skills/organized/skills/invest-dyp-ask/SKILL.md"
+    },
+    {
+      "id": "invest-earnings-review",
+      "name": "Investment Earnings Review",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: earnings review.",
+      "path": "third_party/investment-skills/organized/skills/invest-earnings-review/SKILL.md"
+    },
+    {
+      "id": "invest-earnings-team",
+      "name": "Investment Earnings Team",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: earnings team.",
+      "path": "third_party/investment-skills/organized/skills/invest-earnings-team/SKILL.md"
+    },
+    {
+      "id": "invest-financial-data",
+      "name": "Investment Financial Data",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: financial data.",
+      "path": "third_party/investment-skills/organized/skills/invest-financial-data/SKILL.md"
+    },
+    {
+      "id": "invest-industry-funnel",
+      "name": "Investment Industry Funnel",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: industry funnel.",
+      "path": "third_party/investment-skills/organized/skills/invest-industry-funnel/SKILL.md"
+    },
+    {
+      "id": "invest-industry-research",
+      "name": "Investment Industry Research",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: industry research.",
+      "path": "third_party/investment-skills/organized/skills/invest-industry-research/SKILL.md"
+    },
+    {
+      "id": "invest-investment-checklist",
+      "name": "Investment Investment Checklist",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: investment checklist.",
+      "path": "third_party/investment-skills/organized/skills/invest-investment-checklist/SKILL.md"
+    },
+    {
+      "id": "invest-investment-memo-craft",
+      "name": "Investment Investment Memo Craft",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: investment memo craft.",
+      "path": "third_party/investment-skills/organized/skills/invest-investment-memo-craft/SKILL.md"
+    },
+    {
+      "id": "invest-investment-research",
+      "name": "Investment Investment Research",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: investment research.",
+      "path": "third_party/investment-skills/organized/skills/invest-investment-research/SKILL.md"
+    },
+    {
+      "id": "invest-investment-team",
+      "name": "Investment Investment Team",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: investment team.",
+      "path": "third_party/investment-skills/organized/skills/invest-investment-team/SKILL.md"
+    },
+    {
+      "id": "invest-management-deep-dive",
+      "name": "Investment Management Deep Dive",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: management deep dive.",
+      "path": "third_party/investment-skills/organized/skills/invest-management-deep-dive/SKILL.md"
+    },
+    {
+      "id": "invest-master-benjamin-graham",
+      "name": "Investment Master - Benjamin Graham",
+      "category": "investment-master",
+      "description": "Value investing, intrinsic value, Mr. Market, and margin-of-safety discipline.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-benjamin-graham/SKILL.md"
+    },
+    {
+      "id": "invest-master-george-soros",
+      "name": "Investment Master - George Soros",
+      "category": "investment-master",
+      "description": "Macro reflexivity, asymmetric risk, and thesis invalidation.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-george-soros/SKILL.md"
+    },
+    {
+      "id": "invest-master-jesse-livermore",
+      "name": "Investment Master - Jesse Livermore",
+      "category": "investment-master",
+      "description": "Trend following, tape reading, position discipline, and speculation risk control.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-jesse-livermore/SKILL.md"
+    },
+    {
+      "id": "invest-master-jim-simons",
+      "name": "Investment Master - Jim Simons",
+      "category": "investment-master",
+      "description": "Quantitative research, statistical edge, model validation, and systematic trading.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-jim-simons/SKILL.md"
+    },
+    {
+      "id": "invest-master-john-von-neumann",
+      "name": "Investment Master - John von Neumann",
+      "category": "investment-master",
+      "description": "Game theory, strategic reasoning, expected value, and adversarial market structure.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-john-von-neumann/SKILL.md"
+    },
+    {
+      "id": "invest-master-satoshi-nakamoto",
+      "name": "Investment Master - Satoshi Nakamoto",
+      "category": "investment-master",
+      "description": "Crypto-native market structure, decentralization, protocol incentives, and custody risk.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-satoshi-nakamoto/SKILL.md"
+    },
+    {
+      "id": "invest-master-sun-tzu",
+      "name": "Investment Master - Sun Tzu",
+      "category": "investment-master",
+      "description": "Strategic patience, positioning, asymmetric conflict, and avoiding weak battles.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-sun-tzu/SKILL.md"
+    },
+    {
+      "id": "invest-master-warren-buffett",
+      "name": "Investment Master - Warren Buffett",
+      "category": "investment-master",
+      "description": "Long-term value investing, circle of competence, quality businesses, and compounding.",
+      "path": "third_party/investment-skills/organized/skills/invest-master-warren-buffett/SKILL.md"
+    },
+    {
+      "id": "invest-news-pulse",
+      "name": "Investment News Pulse",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: news pulse.",
+      "path": "third_party/investment-skills/organized/skills/invest-news-pulse/SKILL.md"
+    },
+    {
+      "id": "invest-portfolio-review",
+      "name": "Investment Portfolio Review",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: portfolio review.",
+      "path": "third_party/investment-skills/organized/skills/invest-portfolio-review/SKILL.md"
+    },
+    {
+      "id": "invest-private-company-research",
+      "name": "Investment Private Company Research",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: private company research.",
+      "path": "third_party/investment-skills/organized/skills/invest-private-company-research/SKILL.md"
+    },
+    {
+      "id": "invest-quality-screen",
+      "name": "Investment Quality Screen",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: quality screen.",
+      "path": "third_party/investment-skills/organized/skills/invest-quality-screen/SKILL.md"
+    },
+    {
+      "id": "invest-risk-pre-trade-gate",
+      "name": "Investment Risk - Pre-Trade Gate",
+      "category": "investment-risk",
+      "description": "Pre-trade risk validation gate for investment and trading decisions.",
+      "path": "third_party/investment-skills/organized/skills/invest-risk-pre-trade-gate/SKILL.md"
+    },
+    {
+      "id": "invest-risk-tilt-detector",
+      "name": "Investment Risk - Tilt Detector",
+      "category": "investment-risk",
+      "description": "Detects emotional trading patterns and recommends intervention.",
+      "path": "third_party/investment-skills/organized/skills/invest-risk-tilt-detector/SKILL.md"
+    },
+    {
+      "id": "invest-thesis-tracker",
+      "name": "Investment Thesis Tracker",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: thesis tracker.",
+      "path": "third_party/investment-skills/organized/skills/invest-thesis-tracker/SKILL.md"
+    },
+    {
+      "id": "invest-wechat-article",
+      "name": "Investment Wechat Article",
+      "category": "investment-workflow",
+      "description": "AI Berkshire investment workflow skill: wechat article.",
+      "path": "third_party/investment-skills/organized/skills/invest-wechat-article/SKILL.md"
+    }
+  ]
+}

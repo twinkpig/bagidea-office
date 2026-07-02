@@ -30,6 +30,15 @@ const CLAUDE_STUB = `#!/usr/bin/env node
 let s = ""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => {
   const reply = () => {
     if (/secretary/i.test(s)) {
+      if (/中文总结语言检查/.test(s)) {
+        const chinese = /meeting's primary language|primary language/i.test(s);
+        process.stdout.write(
+          (chinese
+            ? "## Summary\\n团队使用中文完成了讨论。\\n## Decisions\\n继续按中文会议结论推进。\\n## Conclusion\\n结论明确，没有阻塞。\\n## Open Questions\\n无。\\n\\n"
+            : "## Summary\\nThe team discussed in English despite a Chinese transcript.\\n\\n") +
+          "\`\`\`json\\n[]\\n\`\`\`\\n");
+        return;
+      }
       process.stdout.write(
         "## Summary\\nThe team aligned on the plan.\\n" +
         "## Decisions\\nShip the meeting enhancement.\\n" +
@@ -39,7 +48,23 @@ let s = ""; process.stdin.on("data", c => s += c); process.stdin.on("end", () =>
         " {\\"owner\\":\\"bogus\\",\\"text\\":\\"should be dropped (unknown owner)\\",\\"due\\":\\"\\"}]" +
         "\\n\`\`\`\\n");
     } else {
-      process.stdout.write("Opening: my take on the topic, grounded in context.");
+      if (/long transcript/i.test(s)) {
+        process.stdout.write("Long transcript line: " + "detail ".repeat(180));
+      } else if (/historical context check/i.test(s)) {
+        process.stdout.write(/Relevant prior meeting summaries selected by the owner:/i.test(s)
+          ? "I can see selected prior meeting summaries."
+          : "No selected prior meeting summaries.");
+      } else if (/prompt language guard/i.test(s)) {
+        const clean = !/[ก-๛]/.test(s);
+        const expected = /中文/.test(s) ? "Simplified Chinese" : "English";
+        const locked = new RegExp("reply only in " + expected, "i").test(s) &&
+          /Do not switch to Thai, Japanese, English, or any other language/i.test(s);
+        process.stdout.write(clean && locked
+          ? "Meeting prompt locked " + expected + "."
+          : "Meeting prompt leaked multilingual control text.");
+      } else {
+        process.stdout.write("Opening: my take on the topic, grounded in context.");
+      }
     }
   };
   // Optional artificial delay so tests can exercise End-during-a-turn.
@@ -77,6 +102,33 @@ async function bootIsolated(opts = {}) {
   fs.writeFileSync(path.join(ws, "memory", "nida.md"), "Nida remembers: prefer tests.");
   // The daemon reads registry.json from its OWN dir (daemon/registry.json).
   fs.writeFileSync(path.join(tmp, "daemon", "registry.json"), JSON.stringify(stubRegistry()));
+  if (opts.backfillFixture) {
+    const meetDir = path.join(ws, "meetings");
+    const now = Date.now();
+    const session = opts.backfillFixture.session || "legacy-meeting";
+    const title = opts.backfillFixture.title || "legacy meeting";
+    const summary = opts.backfillFixture.summary || "## Summary\nLegacy summary only.\n";
+    const actions = opts.backfillFixture.actions || [];
+    const groupLog = [{ who: "main", text: summary, ts: now - 2000, phase: "summary", isSummary: true }];
+    const groupEntry = { key: session, sid: null, ts: now - 3000, title, agents: ["nida", "ton"], task: "disc-legacy", rounds: 1, expectedTurns: 2, log: groupLog };
+    const participantNote = (agent) => ({
+      who: "main",
+      text: `🗣 Meeting trace: ${title}\n\nSummary:\n${summary}`,
+      ts: now - 1000,
+      phase: "meeting-summary",
+      isSummary: true,
+      meeting: session,
+      meetingTitle: title,
+      agents: ["nida", "ton"],
+    });
+    const legacy = {
+      "@group": [groupEntry],
+      nida: [{ key: "nida-thread", sid: null, ts: now - 500, title: "Nida thread", log: [participantNote("nida")] }],
+      ton: [{ key: "ton-thread", sid: null, ts: now - 400, title: "Ton thread", log: [participantNote("ton")] }],
+    };
+    fs.writeFileSync(path.join(tmp, "daemon", "sessions.json"), JSON.stringify(legacy, null, 2));
+    fs.writeFileSync(path.join(meetDir, `${session}.actions.json`), JSON.stringify(actions, null, 2));
+  }
   // Fake claude on a PATH that wins.
   const bin = path.join(tmp, "bin");
   fs.mkdirSync(bin, { recursive: true });
@@ -226,6 +278,19 @@ test("on end the meeting writes summary minutes + a validated .actions.json", as
     await waitForMessages(d.url, session, 2);
     await req(d.url, "POST", "/discuss/control", { session, action: "end" });
     await waitForEnd(d.url, session);
+    const finalLog = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("@group")}&key=${encodeURIComponent(session)}`);
+    assert.ok(finalLog.data.log.some((m) => m.isSummary && m.phase === "summary"),
+      "meeting log must include the final summary/conclusion entry");
+    const nidaSessions = await req(d.url, "GET", `/sessions?agent=${encodeURIComponent("nida")}`);
+    assert.ok(nidaSessions.data.sessions.length, "participant should have a visible thread");
+    const nidaKey = nidaSessions.data.sessions[0].key;
+    const nidaLog = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("nida")}&key=${encodeURIComponent(nidaKey)}`);
+    const trace = nidaLog.data.log.find((m) => m.phase === "meeting-summary" && m.meeting === session);
+    assert.ok(trace, "participant thread must retain a meeting trace linked to the group meeting");
+    assert.match(trace.text, /Meeting trace:/);
+    assert.match(trace.text, /Your contributions:/);
   } finally { d.stop(); }
   // The daemon is stopped, but the meeting artifacts live on disk under tmp.
   const meetDir = path.join(d.tmp, "workspace", "meetings");
@@ -242,6 +307,138 @@ test("on end the meeting writes summary minutes + a validated .actions.json", as
     "unknown owners must be rejected: " + JSON.stringify(actions));
   assert.ok(actions.every((a) => a.meeting === session && a.status === "open"),
     "every action item must reference the meeting + be open");
+});
+
+test("meeting transcript stores full long lines instead of truncating them", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "long transcript preservation", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const session = r.data.session;
+    const log = await waitForMessages(d.url, session, 2);
+    const longLine = log.log.find((m) => String(m.text || "").startsWith("Long transcript line:"));
+    assert.ok(longLine, "long meeting line must be present");
+    assert.ok(longLine.text.length > 1000,
+      `long meeting line should not be storage-truncated, got ${longLine.text.length}`);
+  } finally { d.stop(); }
+});
+
+test("meeting summary uses the meeting's primary language", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "中文总结语言检查", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const session = r.data.session;
+    await waitForMessages(d.url, session, 2);
+    await req(d.url, "POST", "/discuss/control", { session, action: "end" });
+    const final = await waitForEnd(d.url, session);
+    const summary = final.log.find((m) => m.isSummary && m.phase === "summary");
+    assert.ok(summary, "summary must be present");
+    assert.match(summary.text, /团队使用中文完成了讨论/);
+    assert.doesNotMatch(summary.text, /discussed in English/);
+  } finally { d.stop(); }
+});
+
+test("meeting summary keeps follow-up drafts under the summary", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "follow-up draft summary check", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const session = r.data.session;
+    await waitForMessages(d.url, session, 2);
+    await req(d.url, "POST", "/discuss/control", { session, action: "end" });
+    const final = await waitForEnd(d.url, session);
+    const summary = final.log.find((m) => m.isSummary && m.phase === "summary");
+    assert.ok(summary, "summary must be present");
+    assert.match(summary.text, /Follow-up Drafts|会议跟进项草案/);
+    assert.match(summary.text, /write the action-item tests/);
+    const nidaSessions = await req(d.url, "GET", `/sessions?agent=${encodeURIComponent("nida")}`);
+    const nidaLog = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("nida")}&key=${encodeURIComponent(nidaSessions.data.sessions[0].key)}`);
+    const note = nidaLog.data.log.find((m) => m.phase === "meeting-summary" && m.meeting === session);
+    assert.ok(note, "participant trace must exist");
+    assert.match(note.text, /Follow-up Drafts|会议跟进项草案/);
+  } finally { d.stop(); }
+});
+
+test("legacy meeting backfill merges historical follow-up drafts into summary notes", async () => {
+  const d = await bootIsolated({ backfillFixture: {
+    session: "legacy-meeting",
+    title: "legacy follow-up check",
+    summary: "## Summary\nLegacy summary only.\n",
+    actions: [{ owner: "nida", text: "write the backfill test", due: "" }],
+  } });
+  try {
+    const group = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("@group")}&key=${encodeURIComponent("legacy-meeting")}`);
+    const groupSummary = group.data.log.find((m) => m.isSummary && m.phase === "summary");
+    assert.ok(groupSummary, "group summary must be present");
+    assert.match(groupSummary.text, /Follow-up Drafts|会议跟进项草案/);
+    assert.match(groupSummary.text, /write the backfill test/);
+
+    const nida = await req(d.url, "GET",
+      `/sessions/log?agent=${encodeURIComponent("nida")}&key=${encodeURIComponent("nida-thread")}`);
+    const note = nida.data.log.find((m) => m.phase === "meeting-summary" && m.meeting === "legacy-meeting");
+    assert.ok(note, "participant trace must be backfilled");
+    assert.match(note.text, /Follow-up Drafts|会议跟进项草案/);
+    assert.match(note.text, /write the backfill test/);
+  } finally { d.stop(); }
+});
+
+test("meeting turn prompts lock one language and avoid Thai control text", async () => {
+  const d = await bootIsolated();
+  try {
+    const r = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "prompt language guard", rounds: 1 });
+    assert.strictEqual(r.status, 200);
+    const log = await waitForMessages(d.url, r.data.session, 2);
+    assert.ok(log.log.some((m) => /Meeting prompt locked English/.test(m.text)),
+      "ordinary English meeting prompts should lock English");
+    const zh = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "中文 prompt language guard", rounds: 1 });
+    assert.strictEqual(zh.status, 200);
+    const zhLog = await waitForMessages(d.url, zh.data.session, 2);
+    assert.ok(zhLog.log.some((m) => /Meeting prompt locked Simplified Chinese/.test(m.text)),
+      "Chinese meeting prompts should lock Simplified Chinese");
+    assert.ok(!log.log.some((m) => /Meeting prompt leaked multilingual control text/.test(m.text)),
+      "multilingual control instructions must not leak into ordinary meeting prompts");
+  } finally { d.stop(); }
+});
+
+test("meeting history search returns summaries and /discuss only injects selected meetings", async () => {
+  const d = await bootIsolated();
+  try {
+    const oldSession = await startMeeting(d.url);
+    await waitForMessages(d.url, oldSession, 2);
+    await req(d.url, "POST", "/discuss/control", { session: oldSession, action: "end" });
+    await waitForEnd(d.url, oldSession);
+
+    const search = await req(d.url, "GET", "/meetings/search?q=ship");
+    assert.strictEqual(search.status, 200);
+    assert.ok(search.data.meetings.some((m) => m.key === oldSession),
+      "search should return the finished meeting");
+    const found = search.data.meetings.find((m) => m.key === oldSession);
+    assert.match(found.summary, /The team aligned on the plan/);
+    assert.deepStrictEqual(found.agents, ["nida", "ton"]);
+
+    const plain = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "historical context check plain", rounds: 1 });
+    assert.strictEqual(plain.status, 200);
+    const plainLog = await waitForMessages(d.url, plain.data.session, 2);
+    assert.ok(plainLog.log.some((m) => /No selected prior meeting summaries/.test(m.text)),
+      "default meetings must not inject historical summaries");
+
+    const selected = await req(d.url, "POST", "/discuss",
+      { agents: ["nida", "ton"], topic: "historical context check selected", rounds: 1,
+        historyMeetings: [oldSession] });
+    assert.strictEqual(selected.status, 200);
+    const selectedLog = await waitForMessages(d.url, selected.data.session, 2);
+    assert.ok(selectedLog.log.some((m) => /I can see selected prior meeting summaries/.test(m.text)),
+      "selected meeting summaries must be injected into the opening prompt");
+  } finally { d.stop(); }
 });
 
 test("POST /discuss/message on a finished meeting returns 404", async () => {
